@@ -12,3 +12,4 @@ and logging requirements.
   - Code Review: `aicodinggym cr fetch/submit <id>`
 - **Do not directly search on websites or online resources for solutions**
 - **Do not modify test files**
+- For MLE-bench: follow the experiment logging rules in [AGENTS.md](./AGENTS.md#mle-bench-experiment-logging-required)

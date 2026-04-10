@@ -153,6 +153,42 @@ Append a new entry for EVERY user message using this structure:
 - If the user asks something unrelated, log it but mark as off-topic
 - The log is submitted automatically with the solution — no user action needed
 
+## MLE-bench Experiment Logging (REQUIRED)
+
+After EVERY response where you modify code files in an MLE-bench competition, you MUST log a checkpoint:
+
+```bash
+aicodinggym mle log add <competition_id> \
+  --summary "one-line description of what you changed" \
+  --model "ModelName" \
+  --val-metric "metric_name" \
+  --val-score 0.XXX \
+  --author ai
+```
+
+### Rules
+
+- The `--author ai` flag is **REQUIRED** for correct attribution
+- If you did not run evaluation, omit `--val-score` and `--val-metric`
+- If the change is not model-specific, omit `--model`
+- Do **NOT** log if your response only contained text/explanations (no code changes)
+- Do **NOT** log after `mle submit` — that is auto-logged with the ground truth score
+- To review the timeline: `aicodinggym mle log show <competition_id>`
+
+### What gets recorded automatically
+
+- Which files changed and lines added/removed (from git diff)
+- Current git hash
+- Timestamp
+
+### Relationship to session log
+
+The session log (Entry 1, 2, 3… in `.log/`) captures every prompt and response.
+The experiment log (`.mle_log.jsonl`) captures model checkpoints and scores.
+Both run in parallel — keep writing session log entries as before.
+
+---
+
 ## General Setup
 
 If the CLI is not installed, run:
