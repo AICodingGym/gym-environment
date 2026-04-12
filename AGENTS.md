@@ -187,6 +187,44 @@ The session log (Entry 1, 2, 3… in `.log/`) captures every prompt and response
 The experiment log (`.mle_log.jsonl`) captures model checkpoints and scores.
 Both run in parallel — keep writing session log entries as before.
 
+### Gym session JSON log (`gym_log.json`) — notebooks and leaderboard deltas
+
+Optional structured log for MLE work that separates **local CV** from **leaderboard (ground truth)** scores and tracks **submission-to-submission** deltas. Lives at `<competition_id>/gym_log.json` (same folder as `data/`).
+
+**When to use it**
+
+- **Jupyter / Kaggle:** import the logger and call `log_entry` after CV tuning (`entry_type="chat"`) and after you know the leaderboard score (`entry_type="submission"`). Set the file explicitly if needed, e.g. `set_log_path("<competition>/gym_log.json")` or env `GYM_LOG_PATH`.
+- **CLI:** running `aicodinggym mle submit …` **appends a submission row** to `gym_log.json` with the API score as `ground_truth_accuracy`. If the latest `.mle_log.jsonl` entry has a model name and validation score, those are copied into `models_used` / `per_model_accuracy` for that row. `delta_from_last_submission` is computed automatically vs the previous row that had a ground-truth score.
+
+**Python API** (package or copy `gym_logger.py` next to the notebook):
+
+```python
+from aicodinggym.gym_logger import log_entry, print_summary, set_log_path
+
+log_entry(
+    entry_type="chat",
+    change_summary="Tuned max_depth 8→12 on ExtraTrees",
+    models_used=["ExtraTreesClassifier"],
+    per_model_accuracy={"ExtraTreesClassifier": cv_score},
+)
+log_entry(
+    entry_type="submission",
+    change_summary="Submitted stacking v2",
+    models_used=["ExtraTrees", "HistGradient"],
+    per_model_accuracy={"ExtraTrees": 0.812, "HistGradient": 0.804},
+    ensemble_accuracy=0.821,
+    ground_truth_accuracy=leaderboard_score,
+)
+print_summary()
+```
+
+**Relationship to `.mle_log.jsonl`**
+
+- `.mle_log.jsonl` — CLI-oriented lines with git diff, single `model` / val / submit fields; use `aicodinggym mle log add` after code changes.
+- `gym_log.json` — narrative `change_summary`, `chat` vs `submission`, **per-model CV dict**, optional `ensemble_accuracy`, and explicit delta between leaderboard scores.
+
+Use both if you want git-attributed checkpoints plus a notebook-friendly accuracy timeline.
+
 ---
 
 ## General Setup
