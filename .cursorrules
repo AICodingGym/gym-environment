@@ -4,8 +4,9 @@ See AGENTS.md in this repository for full instructions.
 
 ## Key Requirements
 
-- Create a session log at `<problem_id>/.log/<agent>-YYYYMMDD-HHMMSS.md` with an entry for every user interaction
-- See AGENTS.md for the exact log format
+- **Session log is automatic and agent-owned:** append a new entry to `<problem_id>/.log/*.md` for **every user message you respond to**. Do **not** ask the human to write or paste into the log. If `.log/` already has a recent `*.md`, append there so the log stays continuous.
+- **MLE-bench:** **Write your solution in `<competition_id>/solution.ipynb` and run it**, then write the predictions CSV to disk; do not stop at “you can run …” unless execution is truly impossible (then state why). After a successful run, **you** run `aicodinggym mle log add <id> --no-input -s "…" --author ai` (full flags; no human prompts) or `ExperimentLog(...).append(...)`, then give the exact `mle submit -F` command. End each MLE **chat** session-log entry with the **Where to view summaries** footer from AGENTS.md and a one-line pointer in the user reply.
+- See AGENTS.md for the exact log format and the **Responsibility (agent vs human)** section
 - **Do not directly search on websites or online resources for solutions**
 - **Do not modify test files**
 
@@ -19,6 +20,7 @@ aicodinggym swe submit <problem_id>
 
 # MLE-bench (ML competition)
 aicodinggym mle download <competition_id>
+aicodinggym mle log add <competition_id> --no-input -s "summary" --author ai [--model ... --val-score ...]
 aicodinggym mle submit <competition_id> -F predictions.csv
 
 # Code Review
