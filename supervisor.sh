@@ -160,7 +160,7 @@ ensure_dashboard() {
       </div>
     </div>
     <div class="stats">
-      <div class="stat"><span class="label">Latest metric</span><span class="value accent" id="latestMetric">&mdash;</span></div>
+      <div class="stat"><span class="label">Best accuracy</span><span class="value accent" id="latestMetric">&mdash;</span></div>
       <div class="stat"><span class="label">Updated</span><span class="value" id="latestTime">&mdash;</span></div>
       <div class="stat"><span class="label">Cards</span><span class="value" id="cardCount">0</span></div>
     </div>
@@ -199,7 +199,7 @@ ensure_dashboard() {
         if (a >= 1) return v.toFixed(3);
         return v.toFixed(4);
       };
-      latestEl.textContent = fmt(values[values.length - 1]);
+      latestEl.textContent = fmt(Math.max(...values));
       const w = 1000, h = 210, padL = 60, padR = 64, padT = 24, padB = 30;
       const min = Math.min(...values), max = Math.max(...values);
       const span = (max - min) || Math.max(1e-9, Math.abs(max) * 0.01);
