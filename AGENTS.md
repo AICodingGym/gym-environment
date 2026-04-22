@@ -15,11 +15,30 @@ Check which type you are working on and follow the corresponding workflow below.
 
 Each fetched/downloaded challenge folder is seeded with:
 
-- `supervisor.sh` — wrapper loop for command interception, diff snapshots, notebook execution hook, and submit-output capture
-- `dashboard.html` — append-only HTML dashboard with auto-refresh
-- `tools/notebook_metrics.py` — helper that executes notebooks and extracts `validation_accuracy`/`VAL_ACC`
+- `supervisor.sh` — wrapper that watches the folder, captures per-file diffs, re-runs the notebook metric extractor, and records submit output
+- `dashboard.html` — auto-refreshing HTML dashboard with a metric trend line and collapsible per-card diffs
+- `tools/notebook_metrics.py` — helper that executes `solution.ipynb` and prints `MAX_VALIDATION_ACCURACY=<float>` (extracted from `VAL_ACC:` / `validation_accuracy:` lines in notebook output)
 
-Use `./supervisor.sh --help` inside any challenge folder to see usage.
+**Auto-start on fetch:** `aicodinggym swe fetch`, `aicodinggym mle download`, and
+`aicodinggym cr fetch` each launch `./supervisor.sh --watch` in the background
+inside the new problem folder. Its output is tailed to
+`<problem_dir>/.supervisor.log` and its PID is recorded in
+`<problem_dir>/.supervisor.lock`. Open `dashboard.html` in a browser to see
+live activity cards and the metric trend.
+
+Other entry points you may use by hand:
+
+```bash
+./supervisor.sh --cmd "<command>"   # one-shot: snapshot, run, diff, re-extract metric
+./supervisor.sh --submit            # run the bound submit command and capture the result
+./supervisor.sh --open              # open the dashboard in a browser
+./supervisor.sh --help              # full usage
+```
+
+**To make your notebook contribute a metric point:** print
+`VAL_ACC: <float>` or `validation_accuracy: <float>` (e.g. via
+`print(f"VAL_ACC: {val:.6f}")`) in any cell output. Higher values should mean
+"better" — for loss metrics, expose `-loss` so the chart still trends up.
 
 ---
 

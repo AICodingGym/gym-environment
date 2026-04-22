@@ -17,18 +17,26 @@ The config files here are loaded automatically by AI coding agents when a user o
 - **`AGENTS.md`** — Full exercise instructions, CLI reference, and logging format. Read by all AI agents.
 - **`CLAUDE.md`** — Entry point for Claude Code (references `AGENTS.md`).
 - **`GEMINI.md`** — Entry point for Gemini CLI (references `AGENTS.md`).
-- **`supervisor.sh`** — Optional command wrapper for diff-based HTML logging and notebook automation.
-- **`dashboard.html`** — Starter live dashboard (`<meta refresh>`) used by `supervisor.sh`.
-- **`tools/notebook_metrics.py`** — Notebook executor/parser that prints `MAX_VALIDATION_ACCURACY=...`.
+- **`supervisor.sh`** — Watcher + command wrapper. Auto-started in the background by the CLI after every fetch/download; appends compact activity cards to `dashboard.html` with collapsible per-file diffs.
+- **`dashboard.html`** — Live dashboard (`<meta refresh>` every 5s) with a metric trend line, latest-metric banner, and activity feed. Populated by `supervisor.sh`.
+- **`tools/notebook_metrics.py`** — Notebook executor/parser that prints `MAX_VALIDATION_ACCURACY=...` (extracted from `VAL_ACC: <float>` or `validation_accuracy: <float>` lines in notebook output).
 
-## Supervisor Usage (Optional)
+## Supervisor Usage
 
-Inside any fetched/downloaded challenge folder:
+`aicodinggym swe fetch`, `aicodinggym mle download`, and `aicodinggym cr fetch`
+all auto-start `./supervisor.sh --watch` in the background inside the new
+problem folder. Its output goes to `<problem_dir>/.supervisor.log` and its PID
+lives in `<problem_dir>/.supervisor.lock`. Open `dashboard.html` to see the
+live feed.
+
+You can also drive it by hand inside any challenge folder:
 
 ```bash
-./supervisor.sh --help
-./supervisor.sh --cmd "aicodinggym mle log show <competition_id>"
-./supervisor.sh --submit
+./supervisor.sh --help                     # full usage
+./supervisor.sh --watch                    # manual start (if auto-start was skipped)
+./supervisor.sh --cmd "python train.py"    # one-shot: snapshot, run, diff, re-extract metric
+./supervisor.sh --submit                   # run the bound submit command and capture the result
+./supervisor.sh --open                     # open dashboard.html in your browser
 ```
 
 Optional alias:
