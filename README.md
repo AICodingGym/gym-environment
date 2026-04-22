@@ -20,6 +20,7 @@ The config files here are loaded automatically by AI coding agents when a user o
 - **`supervisor.sh`** — Watcher + command wrapper. Auto-started in the background by the CLI after every fetch/download; appends compact activity cards to `dashboard.html` with collapsible per-file diffs.
 - **`dashboard.html`** — Live dashboard (`<meta refresh>` every 5s) with a metric trend line, latest-metric banner, and activity feed. Populated by `supervisor.sh`.
 - **`tools/notebook_metrics.py`** — Notebook executor/parser that prints `MAX_VALIDATION_ACCURACY=...` (extracted from `VAL_ACC: <float>` or `validation_accuracy: <float>` lines in notebook output).
+- **`tools/summarize_approach.py`** — Parses `solution.ipynb` and emits the plain-English HTML fragment rendered in the dashboard's "Approach summary" panel (preprocessing / model / evaluation).
 
 ## Supervisor Usage
 
