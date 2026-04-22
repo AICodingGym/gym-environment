@@ -19,6 +19,7 @@ NOTEBOOK_PATH="$ROOT_DIR/solution.ipynb"
 SNAPSHOT_DIR="$ROOT_DIR/.supervisor_snapshot"
 LOCK_FILE="$ROOT_DIR/.supervisor.lock"
 HELPER="$ROOT_DIR/tools/notebook_metrics.py"
+APPROACH_HELPER="$ROOT_DIR/tools/summarize_approach.py"
 DEFAULT_CMD="aicodinggym mle log show <competition_or_problem_id>"
 SUBMIT_CMD="aicodinggym mle submit <competition_or_problem_id> -F submission.csv"
 WATCH_INTERVAL=3
@@ -200,6 +201,9 @@ snapshot_workspace() {
 
 # Builds a compact list of changed files and an optional collapsed <details>
 # with the full diff. Notebooks and binaries get summarized, not dumped.
+# Output layout: first line is ``TITLE=<human-friendly title>``; remaining lines
+# are the HTML body to splice into a card. ``render_change_title`` reads that
+# first line and strips it off so callers can use it as the card title.
 render_change_card_body() {
   local body_file
   body_file="$(mktemp)"
@@ -308,13 +312,54 @@ for rel in all_rels:
     changes.append((status, rel, added, removed, diff_html))
 
 if not changes:
+    print('TITLE=No changes')
     print('        <div class="empty">No file changes detected.</div>')
     sys.exit(0)
 
-# Summary line: N files, +X / -Y
+# Group by status, preserving order of discovery.
+added_names = [c[1] for c in changes if c[0] == "added"]
+modified_names = [c[1] for c in changes if c[0] == "modified"]
+removed_names = [c[1] for c in changes if c[0] == "removed"]
 total_added = sum(c[2] for c in changes)
 total_removed = sum(c[3] for c in changes)
-summary = f'{len(changes)} file{"s" if len(changes)!=1 else ""} changed, <span class="plus">+{total_added}</span> / <span class="minus">-{total_removed}</span>'
+
+def _fmt_names(names, limit=3):
+    if not names:
+        return ""
+    shown = [f'<code>{html.escape(n)}</code>' for n in names[:limit]]
+    extra = len(names) - len(shown)
+    if extra > 0:
+        shown.append(f'<span class="muted">+{extra} more</span>')
+    return ", ".join(shown)
+
+parts = []
+if added_names:
+    parts.append(f'<span class="plus">added</span> {_fmt_names(added_names)}')
+if modified_names:
+    parts.append(f'<span class="pill info">edited</span> {_fmt_names(modified_names)}')
+if removed_names:
+    parts.append(f'<span class="minus">removed</span> {_fmt_names(removed_names)}')
+parts.append(f'<span class="plus">+{total_added}</span> / <span class="minus">-{total_removed}</span>')
+summary = " \u00b7 ".join(parts)
+
+# Human-friendly title for the card. Single-file actions get a specific verb.
+def _title():
+    n = len(changes)
+    if n == 1:
+        st, rel, *_ = changes[0]
+        verb = {"added": "Added", "removed": "Removed", "modified": "Edited"}[st]
+        return f'{verb} {rel}'
+    if added_names and not modified_names and not removed_names:
+        return f'Added {len(added_names)} file{"s" if len(added_names)!=1 else ""}'
+    if modified_names and not added_names and not removed_names:
+        # E.g. "Edited solution.ipynb + 2 more"
+        first = modified_names[0]
+        extra = len(modified_names) - 1
+        return f'Edited {first}' + (f' + {extra} more' if extra else '')
+    return f'Changed {n} files'
+
+# The shell caller reads the TITLE= line and strips it before inserting the rest as body.
+print(f'TITLE={_title()}')
 print(f'        <div class="meta">{summary}</div>')
 
 # Collapsed list of per-file diffs.
@@ -335,9 +380,54 @@ PY
   rm -f "$body_file"
 }
 
+# Read the TITLE= header line out of the body text produced above.
+# Echoes ("title"\n"body") on stdout; caller reads with two `read` calls.
+split_change_output() {
+  local full="$1"
+  local title="${2:-Change Detected}"
+  local first_line
+  first_line="$(printf "%s\n" "$full" | head -n1)"
+  if [[ "$first_line" == TITLE=* ]]; then
+    title="${first_line#TITLE=}"
+    full="$(printf "%s\n" "$full" | tail -n +2)"
+  fi
+  printf '%s\n---END-OF-TITLE---\n%s' "$title" "$full"
+}
+
+# Re-render the "Approach summary" panel from the current notebook contents and
+# splice it into dashboard.html. Always replaces the existing <section id="approach">…</section>
+# block so the panel stays in sync with solution.ipynb without accumulating history.
+refresh_approach_summary() {
+  [[ -f "$APPROACH_HELPER" ]] || return 0
+  [[ -f "$DASHBOARD_PATH" ]] || return 0
+  local tmp_html
+  tmp_html="$(mktemp)"
+  if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$tmp_html" 2>/dev/null; then
+    rm -f "$tmp_html"
+    return 0
+  fi
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$tmp_html" <<'PY'
+import pathlib, re, sys
+dash_path = pathlib.Path(sys.argv[1])
+frag_path = pathlib.Path(sys.argv[2])
+dash = dash_path.read_text(encoding="utf-8")
+frag = frag_path.read_text(encoding="utf-8").strip()
+pattern = re.compile(r'<section id="approach".*?</section>', re.DOTALL)
+if pattern.search(dash):
+    new = pattern.sub(lambda _m: frag, dash, count=1)
+else:
+    # Older dashboards (before this feature) had no placeholder. Inject after <main>.
+    new = dash.replace("<main>", "<main>\n    " + frag, 1)
+if new != dash:
+    dash_path.write_text(new, encoding="utf-8", newline="\n")
+PY
+  rm -f "$tmp_html"
+}
+
 run_notebook_and_log_metric() {
   if [[ ! -f "$NOTEBOOK_PATH" ]]; then
     append_card "Notebook Metric" "No <code>solution.ipynb</code> found yet" '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
+    refresh_approach_summary
     return
   fi
   local output status max_acc
@@ -362,12 +452,13 @@ run_notebook_and_log_metric() {
   fi
   local meta
   if [[ "$max_acc" == "NA" ]]; then
-    meta="$pill <code>MAX_VALIDATION_ACCURACY=NA</code> \u2013 add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
+    meta="$pill <code>MAX_VALIDATION_ACCURACY=NA</code> – add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
     append_card "Notebook Metric" "$meta" "$body"
   else
     meta="$pill <code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc"
   fi
+  refresh_approach_summary
 }
 
 run_wrapped_command() {
@@ -382,15 +473,23 @@ run_wrapped_command() {
   set -e
 
   sleep 1
-  local body meta pill
-  body="$(render_change_card_body)"
+  local raw_body title body pill meta
+  raw_body="$(render_change_card_body)"
+  title="$(printf "%s" "$raw_body" | head -n1)"
+  if [[ "$title" == TITLE=* ]]; then
+    title="${title#TITLE=}"
+    body="$(printf "%s\n" "$raw_body" | tail -n +2)"
+  else
+    title="AI Run"
+    body="$raw_body"
+  fi
   if [[ "$status" -eq 0 ]]; then
     pill='<span class="pill ok">ok</span>'
   else
     pill='<span class="pill fail">exit '"$status"'</span>'
   fi
   meta="$pill <code>$(printf "%s" "$command" | html_escape)</code>"
-  append_card "AI Run" "$meta" "$body"
+  append_card "$title" "$meta" "$body"
 
   local tail_output
   tail_output="$(printf "%s\n" "$command_output" | tail -n "$MAX_OUTPUT_LINES")"
@@ -410,20 +509,37 @@ watch_loop() {
     first_run=1
   fi
   snapshot_workspace
+  # Populate the Approach summary panel immediately so users see it even
+  # before the first notebook run completes.
+  refresh_approach_summary
   if [[ "$first_run" -eq 1 ]]; then
-    append_card "Supervisor Ready" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s \u2013 edits you make will appear below" '        <div class="empty">No changes yet. Start coding\u2014each save will append a card.</div>'
+    append_card "Supervisor Ready" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s – edits you make will appear below" '        <div class="empty">No changes yet. Start coding—each save will append a card.</div>'
+    # Auto-open the dashboard only for manual terminal runs; when the aicodinggym
+    # CLI spawns us in the background stdout is redirected to a file and will
+    # pop the browser itself, so we skip to avoid opening two tabs.
+    if [[ -t 1 ]]; then
+      open_dashboard
+    fi
   else
     append_card "Watcher Restarted" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s" '        <div class="empty">Resuming watch mode.</div>'
   fi
   while true; do
     sleep "$WATCH_INTERVAL"
     # Check whether any file actually changed before doing expensive work.
-    local body
-    body="$(render_change_card_body)"
-    if [[ "$body" == *"No file changes detected."* ]]; then
+    local raw title body
+    raw="$(render_change_card_body)"
+    if [[ "$raw" == *"No file changes detected."* ]]; then
       continue
     fi
-    append_card "Change Detected" "" "$body"
+    title="$(printf "%s" "$raw" | head -n1)"
+    if [[ "$title" == TITLE=* ]]; then
+      title="${title#TITLE=}"
+      body="$(printf "%s\n" "$raw" | tail -n +2)"
+    else
+      title="Change Detected"
+      body="$raw"
+    fi
+    append_card "$title" "" "$body"
     run_notebook_and_log_metric
     snapshot_workspace
   done
