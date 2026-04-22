@@ -11,18 +11,6 @@ Check which type you are working on and follow the corresponding workflow below.
 
 ---
 
-## Supervisor Assets (Available in Every Pulled Problem)
-
-Each fetched/downloaded challenge folder is seeded with:
-
-- `supervisor.sh` — wrapper loop for command interception, diff snapshots, notebook execution hook, and submit-output capture
-- `dashboard.html` — append-only HTML dashboard with auto-refresh
-- `tools/notebook_metrics.py` — helper that executes notebooks and extracts `validation_accuracy`/`VAL_ACC`
-
-Use `./supervisor.sh --help` inside any challenge folder to see usage.
-
----
-
 ## Challenge Type 1: SWE-bench (Bug Fix)
 
 Real bugs from open-source projects. Your goal is to identify and fix the bug
