@@ -171,8 +171,9 @@ ensure_dashboard() {
       <div class="empty">Create <code>solution.ipynb</code> and save it &mdash; this panel will auto-summarize your preprocessing, model, and evaluation in plain English.</div>
     </section>
     <div class="panel">
-      <h2>Metric trend (<span id="metricDirection">higher is better</span>)</h2>
+      <h2>Metric trend (<span id="metricDirection">higher is better</span>) <span class="approach-dim" style="font-weight:500;text-transform:none;letter-spacing:0;">&middot; oldest on the left, newest on the right &middot; click a dot for what changed</span></h2>
       <svg id="metricChart" viewBox="0 0 1000 210" preserveAspectRatio="xMidYMid meet"></svg>
+      <div id="metricNote" class="empty" style="margin-top:6px;">Click a point on the chart to see a one-line summary of what changed to produce it.</div>
     </div>
     <div id="cards"></div>
   </main>
@@ -180,13 +181,25 @@ ensure_dashboard() {
     (function () {
       const cards = Array.from(document.querySelectorAll("#cards .card"));
       document.getElementById("cardCount").textContent = cards.length;
-      const metricCards = cards.filter((c) => c.hasAttribute("data-metric"));
-      const values = metricCards.map((c) => Number(c.getAttribute("data-metric"))).filter(Number.isFinite);
+      // Cards are rendered newest-first in the DOM; reverse to get chronological order
+      // (oldest -> newest, left -> right) for the metric chart.
+      const metricCardsDom = cards.filter((c) =>
+        c.hasAttribute("data-metric") &&
+        Number.isFinite(Number(c.getAttribute("data-metric")))
+      );
+      const metricCards = metricCardsDom.slice().reverse();
+      const values = metricCards.map((c) => Number(c.getAttribute("data-metric")));
+      const notes  = metricCards.map((c) => c.getAttribute("data-note") || "");
+      const times  = metricCards.map((c) => {
+        const t = c.querySelector(".time");
+        return t ? t.textContent : "";
+      });
       const svg = document.getElementById("metricChart");
       const latestEl = document.getElementById("latestMetric");
       const latestTimeEl = document.getElementById("latestTime");
+      const noteEl = document.getElementById("metricNote");
       if (cards.length) {
-        const t = cards[cards.length - 1].querySelector(".time");
+        const t = cards[0].querySelector(".time");
         if (t) latestTimeEl.textContent = t.textContent;
       }
       if (!values.length) {
@@ -200,6 +213,17 @@ ensure_dashboard() {
         return v.toFixed(4);
       };
       latestEl.textContent = fmt(Math.max(...values));
+      const showNote = (i) => {
+        if (!noteEl) return;
+        const note = notes[i] ||
+          (i === 0
+            ? "First recorded run — refer to the Approach summary panel above for the current pipeline."
+            : "No change note was captured for this run.");
+        noteEl.innerHTML =
+          '<b>#' + (i + 1) + '</b> &middot; ' + fmt(values[i]) +
+          (times[i] ? ' &middot; <span style="color:var(--muted)">' + times[i] + '</span>' : '') +
+          '<br>' + note;
+      };
       const w = 1000, h = 210, padL = 60, padR = 64, padT = 24, padB = 30;
       const min = Math.min(...values), max = Math.max(...values);
       const span = (max - min) || Math.max(1e-9, Math.abs(max) * 0.01);
@@ -210,9 +234,13 @@ ensure_dashboard() {
         const v = values[0];
         svg.innerHTML =
           `<line class="axis" x1="${padL}" y1="${h-padB}" x2="${w-padR}" y2="${h-padB}" />` +
-          `<circle cx="${w/2}" cy="${h/2}" r="6" fill="${STROKE}" />` +
-          `<text class="pt-label latest" x="${w/2}" y="${h/2 - 16}">${fmt(v)}</text>` +
+          `<circle cx="${w/2}" cy="${h/2}" r="6" fill="${STROKE}" style="cursor:pointer" data-i="0" />` +
+          `<text class="pt-label latest" x="${w/2}" y="${h/2 - 16}" style="font-weight:800">${fmt(v)}</text>` +
           `<text class="gridlabel" x="${padL}" y="${h - 8}" text-anchor="start">single observation</text>`;
+        svg.querySelectorAll("circle[data-i]").forEach((c) => {
+          c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+        });
+        showNote(0);
         return;
       }
       const gridLines = [min, (min + max) / 2, max];
@@ -227,13 +255,19 @@ ensure_dashboard() {
       html += `<polyline fill="none" stroke="${STROKE}" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}" />`;
       values.forEach((v, i) => {
         const x = xOf(i), y = yOf(v);
+        // Rightmost point is the most recent run -> bold & enlarged.
         const isLatest = i === values.length - 1;
-        html += `<circle cx="${x}" cy="${y}" r="${isLatest ? 5.5 : 3.25}" fill="${STROKE}" stroke="#FFFFFF" stroke-width="${isLatest ? 2 : 1.5}" />`;
+        html += `<circle cx="${x}" cy="${y}" r="${isLatest ? 6.5 : 3.25}" fill="${STROKE}" stroke="#FFFFFF" stroke-width="${isLatest ? 2.25 : 1.5}" style="cursor:pointer" data-i="${i}"><title>Click for change note</title></circle>`;
         const aboveOK = y - padT > 20;
         const labelY = aboveOK ? y - 10 : y + 18;
-        html += `<text class="pt-label${isLatest ? " latest" : ""}" x="${x}" y="${labelY}">${fmt(v)}</text>`;
+        const weight = isLatest ? ' style="font-weight:800"' : '';
+        html += `<text class="pt-label${isLatest ? " latest" : ""}"${weight} x="${x}" y="${labelY}">${fmt(v)}</text>`;
       });
       svg.innerHTML = html;
+      svg.querySelectorAll("circle[data-i]").forEach((c) => {
+        c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+      });
+      showNote(values.length - 1);
     })();
   </script>
 </body>
@@ -243,16 +277,19 @@ EOF
 }
 
 append_card() {
-  # Args: title, meta_html, body_html, metric_value (optional)
+  # Args: title, meta_html, body_html, metric_value (optional), note (optional)
+  # ``note`` is attached to the card as a data-note attribute so the dashboard
+  # chart can surface it when the user clicks the corresponding point.
   local title="$1"
   local meta="$2"
   local body_html="$3"
   local metric="${4:-}"
+  local note="${5:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" <<'PY' "$body_html" >"$temp_file"
-import sys, pathlib, datetime
-dash_path, title, meta, metric, body = sys.argv[1:6]
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" <<'PY' "$body_html" >"$temp_file"
+import sys, pathlib, datetime, html as _h
+dash_path, title, meta, metric, note, body = sys.argv[1:7]
 src = pathlib.Path(dash_path).read_text(encoding="utf-8")
 anchor = '<div id="cards">'
 idx = src.find(anchor)
@@ -260,8 +297,12 @@ out = src
 if idx != -1:
     insert_at = idx + len(anchor)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    attr = f' data-metric="{metric}"' if metric else ''
-    card_lines = [f'\n      <div class="card"{attr}>']
+    attrs = ''
+    if metric:
+        attrs += f' data-metric="{metric}"'
+    if note:
+        attrs += f' data-note="{_h.escape(note, quote=True)}"'
+    card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
         card_lines.append(f'        <div class="meta">{meta}</div>')
@@ -282,6 +323,7 @@ snapshot_workspace() {
       --exclude ".git" \
       --exclude ".supervisor_snapshot" \
       --exclude ".supervisor.lock" \
+      --exclude ".supervisor_prev_notebook.ipynb" \
       --exclude "dashboard.html" \
       "$ROOT_DIR/" "$SNAPSHOT_DIR/"
     return
@@ -293,6 +335,7 @@ snapshot_workspace() {
       -path ./.git -prune -o \
       -path ./.supervisor_snapshot -prune -o \
       -name .supervisor.lock -prune -o \
+      -name .supervisor_prev_notebook.ipynb -prune -o \
       -name dashboard.html -prune -o \
       -print0 |
       while IFS= read -r -d '' path; do
@@ -321,7 +364,7 @@ import difflib, html, os, sys, pathlib, filecmp
 
 snap, root, max_lines = sys.argv[1], sys.argv[2], int(sys.argv[3])
 SKIP_DIRS = {".git", ".supervisor_snapshot", "__pycache__"}
-SKIP_NAMES = {".supervisor.lock", "dashboard.html"}
+SKIP_NAMES = {".supervisor.lock", ".supervisor_prev_notebook.ipynb", "dashboard.html"}
 BINARY_SUFFIXES = {".zip", ".gz", ".tar", ".pkl", ".joblib", ".npy", ".npz", ".parquet", ".pt", ".pth", ".bin", ".onnx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".csv", ".xls", ".xlsx"}
 
 def walk(base):
@@ -382,10 +425,52 @@ for rel in all_rels:
     diff_html = ""
 
     if kind == "notebook":
-        # Avoid dumping JSON; just say "notebook changed" with byte delta.
-        s1 = snap_files.get(rel, 0)
-        s2 = root_files.get(rel, 0)
-        diff_html = f'<pre>notebook {status} (size {s1} \u2192 {s2} bytes)</pre>'
+        # Diff only the cell source text (code + markdown). Skipping execution
+        # counts, outputs, and base64 blobs gives an accurate +/- line count and
+        # a readable diff instead of a meaningless "size X -> Y" line.
+        def _notebook_sources(path):
+            import json as _json
+            try:
+                data = _json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            out = []
+            for idx, cell in enumerate(data.get("cells", [])):
+                ctype = cell.get("cell_type", "?")
+                src = cell.get("source", [])
+                if isinstance(src, list):
+                    src = "".join(src)
+                out.append(f"# --- cell {idx} ({ctype}) ---")
+                out.extend(src.splitlines() or [""])
+            return out
+        a_src = _notebook_sources(snap_path) if in_snap else []
+        b_src = _notebook_sources(root_path) if in_root else []
+        if a_src is None or b_src is None:
+            s1 = snap_files.get(rel, 0)
+            s2 = root_files.get(rel, 0)
+            diff_html = f'<pre>notebook {status} (unparseable JSON; size {s1} \u2192 {s2} bytes)</pre>'
+        else:
+            diff_lines = list(difflib.unified_diff(a_src, b_src, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""))
+            for ln in diff_lines:
+                if ln.startswith("+") and not ln.startswith("+++"):
+                    added += 1
+                elif ln.startswith("-") and not ln.startswith("---"):
+                    removed += 1
+            if len(diff_lines) > max_lines:
+                truncated = diff_lines[:max_lines]
+                truncated.append(f"... ({len(diff_lines) - max_lines} more lines)")
+                diff_lines = truncated
+            rendered = []
+            for ln in diff_lines:
+                esc = html.escape(ln)
+                if ln.startswith("+") and not ln.startswith("+++"):
+                    rendered.append(f'<span class="plus">{esc}</span>')
+                elif ln.startswith("-") and not ln.startswith("---"):
+                    rendered.append(f'<span class="minus">{esc}</span>')
+                else:
+                    rendered.append(esc)
+            body = "\n".join(rendered) if rendered else "(notebook source unchanged; only outputs/metadata differ)"
+            diff_html = f'<pre>{body}</pre>'
     elif kind == "binary":
         s1 = snap_files.get(rel, 0)
         s2 = root_files.get(rel, 0)
@@ -432,6 +517,23 @@ removed_names = [c[1] for c in changes if c[0] == "removed"]
 total_added = sum(c[2] for c in changes)
 total_removed = sum(c[3] for c in changes)
 
+# Detect who made the change. Priority:
+#   1. Explicit AICODINGGYM_ACTOR env var (e.g. set by wrapper scripts).
+#   2. Heuristic: a touched .log/*.md session-log file implies the AI agent
+#      (only agents write session logs per AGENTS.md).
+_actor = (os.environ.get("AICODINGGYM_ACTOR") or "").strip().lower() or None
+if _actor is None:
+    _log_touched = any(
+        c[1].startswith(".log/") and c[1].endswith(".md") for c in changes
+    )
+    _actor = "ai" if _log_touched else "human"
+if _actor == "ai":
+    _actor_pill = '<span class="pill info">by ai</span>'
+elif _actor == "human":
+    _actor_pill = '<span class="pill ok">by human</span>'
+else:
+    _actor_pill = f'<span class="pill">by {html.escape(_actor)}</span>'
+
 def _fmt_names(names, limit=3):
     if not names:
         return ""
@@ -441,7 +543,7 @@ def _fmt_names(names, limit=3):
         shown.append(f'<span class="muted">+{extra} more</span>')
     return ", ".join(shown)
 
-parts = []
+parts = [_actor_pill]
 if added_names:
     parts.append(f'<span class="plus">added</span> {_fmt_names(added_names)}')
 if modified_names:
@@ -533,12 +635,113 @@ PY
   rm -f "$tmp_html"
 }
 
+# Produces a one-line summary of what changed in solution.ipynb since the last
+# metric run. The previous notebook state is kept in $ROOT_DIR/.supervisor_prev_notebook.ipynb
+# (excluded from snapshots and the change walker). Callers should refresh that
+# state *after* consuming the note so the next run diffs against this run.
+compute_notebook_change_note() {
+  local prev="$ROOT_DIR/.supervisor_prev_notebook.ipynb"
+  if [[ ! -f "$NOTEBOOK_PATH" ]]; then
+    printf ''
+    return
+  fi
+  if [[ ! -f "$prev" ]]; then
+    printf 'First recorded run \xe2\x80\x94 refer to the Approach summary panel for the current pipeline.'
+    return
+  fi
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$prev" "$NOTEBOOK_PATH" <<'PY'
+import json, sys, difflib, pathlib
+
+def load_cells(path):
+    try:
+        data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    out = []
+    for cell in data.get("cells", []):
+        ctype = cell.get("cell_type", "?")
+        src = cell.get("source", [])
+        if isinstance(src, list):
+            src = "".join(src)
+        out.append((ctype, src.splitlines()))
+    return out
+
+a = load_cells(sys.argv[1])
+b = load_cells(sys.argv[2])
+if a is None or b is None:
+    print("Notebook could not be parsed; no change summary available.")
+    sys.exit(0)
+
+# Align by cell index (common case: supervisor re-runs with the same layout,
+# individual cell sources mutated). We count +/- lines per cell and collect the
+# single most informative added line (first non-empty + line) as a hint.
+hints = []
+total_add = total_rm = 0
+touched = []
+for i in range(max(len(a), len(b))):
+    if i >= len(a):
+        ctype, lines = b[i]
+        total_add += len(lines)
+        touched.append(f"+cell {i} ({ctype})")
+        for ln in lines:
+            s = ln.strip()
+            if s:
+                hints.append(s)
+                break
+        continue
+    if i >= len(b):
+        ctype, lines = a[i]
+        total_rm += len(lines)
+        touched.append(f"-cell {i} ({ctype})")
+        continue
+    (ta, la), (tb, lb) = a[i], b[i]
+    if la == lb and ta == tb:
+        continue
+    diff = list(difflib.unified_diff(la, lb, lineterm=""))
+    a_cnt = sum(1 for ln in diff if ln.startswith("+") and not ln.startswith("+++"))
+    r_cnt = sum(1 for ln in diff if ln.startswith("-") and not ln.startswith("---"))
+    if a_cnt == 0 and r_cnt == 0:
+        continue
+    total_add += a_cnt
+    total_rm += r_cnt
+    touched.append(f"cell {i} (+{a_cnt}/-{r_cnt})")
+    if not hints:
+        for ln in diff:
+            if ln.startswith("+") and not ln.startswith("+++"):
+                s = ln[1:].strip()
+                if s:
+                    hints.append(s)
+                    break
+
+if not touched:
+    print("Re-ran notebook; source unchanged since the previous metric.")
+    sys.exit(0)
+
+if len(touched) <= 3:
+    detail = ", ".join(touched)
+else:
+    detail = ", ".join(touched[:3]) + f" and {len(touched)-3} more"
+
+summary = f"Notebook source changed: {detail}; total +{total_add}/-{total_rm} source lines."
+if hints:
+    hint = hints[0]
+    if len(hint) > 140:
+        hint = hint[:137] + "..."
+    summary += f" First new line: `{hint}`"
+print(summary)
+PY
+}
+
 run_notebook_and_log_metric() {
   if [[ ! -f "$NOTEBOOK_PATH" ]]; then
     append_card "Notebook Metric" "No <code>solution.ipynb</code> found yet" '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
     refresh_approach_summary
     return
   fi
+  # Capture the change summary *before* the metric run so the note describes
+  # what produced this metric (current notebook vs previous recorded run).
+  local change_note
+  change_note="$(compute_notebook_change_note || true)"
   local output status max_acc
   set +e
   output="$("$PY_BIN" "$HELPER" "$NOTEBOOK_PATH" 2>&1)"
@@ -562,11 +765,15 @@ run_notebook_and_log_metric() {
   local meta
   if [[ "$max_acc" == "NA" ]]; then
     meta="$pill <code>MAX_VALIDATION_ACCURACY=NA</code> â€“ add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
-    append_card "Notebook Metric" "$meta" "$body"
+    append_card "Notebook Metric" "$meta" "$body" "" "$change_note"
   else
     meta="$pill <code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
-    append_card "Notebook Metric" "$meta" "$body" "$max_acc"
+    append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note"
   fi
+  # Persist the current notebook as the baseline for the next metric run so the
+  # next compute_notebook_change_note diffs against this run. Copy silently; if
+  # cp fails we simply lose the note next time, which is acceptable.
+  cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true
   refresh_approach_summary
 }
 

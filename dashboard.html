@@ -127,8 +127,9 @@
       <div class="empty">Create <code>solution.ipynb</code> and save it &mdash; this panel will auto-summarize your preprocessing, model, and evaluation in plain English.</div>
     </section>
     <div class="panel">
-      <h2>Metric trend (<span id="metricDirection">higher is better</span>)</h2>
+      <h2>Metric trend (<span id="metricDirection">higher is better</span>) <span class="approach-dim" style="font-weight:500;text-transform:none;letter-spacing:0;">&middot; oldest on the left, newest on the right &middot; click a dot for what changed</span></h2>
       <svg id="metricChart" viewBox="0 0 1000 210" preserveAspectRatio="xMidYMid meet"></svg>
+      <div id="metricNote" class="empty" style="margin-top:6px;">Click a point on the chart to see a one-line summary of what changed to produce it.</div>
     </div>
     <div id="cards"></div>
   </main>
@@ -136,13 +137,26 @@
     (function () {
       const cards = Array.from(document.querySelectorAll("#cards .card"));
       document.getElementById("cardCount").textContent = cards.length;
-      const metricCards = cards.filter((c) => c.hasAttribute("data-metric"));
-      const values = metricCards.map((c) => Number(c.getAttribute("data-metric"))).filter(Number.isFinite);
+      // Cards are rendered newest-first in the DOM; reverse to get chronological order
+      // (oldest -> newest, left -> right) for the metric chart.
+      const metricCardsDom = cards.filter((c) =>
+        c.hasAttribute("data-metric") &&
+        Number.isFinite(Number(c.getAttribute("data-metric")))
+      );
+      const metricCards = metricCardsDom.slice().reverse();
+      const values = metricCards.map((c) => Number(c.getAttribute("data-metric")));
+      const notes  = metricCards.map((c) => c.getAttribute("data-note") || "");
+      const times  = metricCards.map((c) => {
+        const t = c.querySelector(".time");
+        return t ? t.textContent : "";
+      });
       const svg = document.getElementById("metricChart");
       const latestEl = document.getElementById("latestMetric");
       const latestTimeEl = document.getElementById("latestTime");
+      const noteEl = document.getElementById("metricNote");
+      // Show the newest card's timestamp in the header (cards[0] is newest in DOM order).
       if (cards.length) {
-        const t = cards[cards.length - 1].querySelector(".time");
+        const t = cards[0].querySelector(".time");
         if (t) latestTimeEl.textContent = t.textContent;
       }
       if (!values.length) {
@@ -156,6 +170,17 @@
         return v.toFixed(4);
       };
       latestEl.textContent = fmt(Math.max(...values));
+      const showNote = (i) => {
+        if (!noteEl) return;
+        const note = notes[i] ||
+          (i === 0
+            ? "First recorded run — refer to the Approach summary panel above for the current pipeline."
+            : "No change note was captured for this run.");
+        noteEl.innerHTML =
+          '<b>#' + (i + 1) + '</b> &middot; ' + fmt(values[i]) +
+          (times[i] ? ' &middot; <span style="color:var(--muted)">' + times[i] + '</span>' : '') +
+          '<br>' + note;
+      };
       const w = 1000, h = 210, padL = 60, padR = 64, padT = 24, padB = 30;
       const min = Math.min(...values), max = Math.max(...values);
       const span = (max - min) || Math.max(1e-9, Math.abs(max) * 0.01);
@@ -166,9 +191,13 @@
         const v = values[0];
         svg.innerHTML =
           `<line class="axis" x1="${padL}" y1="${h-padB}" x2="${w-padR}" y2="${h-padB}" />` +
-          `<circle cx="${w/2}" cy="${h/2}" r="6" fill="${STROKE}" />` +
-          `<text class="pt-label latest" x="${w/2}" y="${h/2 - 16}">${fmt(v)}</text>` +
+          `<circle cx="${w/2}" cy="${h/2}" r="6" fill="${STROKE}" style="cursor:pointer" data-i="0" />` +
+          `<text class="pt-label latest" x="${w/2}" y="${h/2 - 16}" style="font-weight:800">${fmt(v)}</text>` +
           `<text class="gridlabel" x="${padL}" y="${h - 8}" text-anchor="start">single observation</text>`;
+        svg.querySelectorAll("circle[data-i]").forEach((c) => {
+          c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+        });
+        showNote(0);
         return;
       }
       const gridLines = [min, (min + max) / 2, max];
@@ -183,13 +212,20 @@
       html += `<polyline fill="none" stroke="${STROKE}" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}" />`;
       values.forEach((v, i) => {
         const x = xOf(i), y = yOf(v);
+        // Rightmost point (values.length - 1) is the most recent run -> bold & enlarged.
         const isLatest = i === values.length - 1;
-        html += `<circle cx="${x}" cy="${y}" r="${isLatest ? 5.5 : 3.25}" fill="${STROKE}" stroke="#FFFFFF" stroke-width="${isLatest ? 2 : 1.5}" />`;
+        html += `<circle cx="${x}" cy="${y}" r="${isLatest ? 6.5 : 3.25}" fill="${STROKE}" stroke="#FFFFFF" stroke-width="${isLatest ? 2.25 : 1.5}" style="cursor:pointer" data-i="${i}"><title>Click for change note</title></circle>`;
         const aboveOK = y - padT > 20;
         const labelY = aboveOK ? y - 10 : y + 18;
-        html += `<text class="pt-label${isLatest ? " latest" : ""}" x="${x}" y="${labelY}">${fmt(v)}</text>`;
+        const weight = isLatest ? ' style="font-weight:800"' : '';
+        html += `<text class="pt-label${isLatest ? " latest" : ""}"${weight} x="${x}" y="${labelY}">${fmt(v)}</text>`;
       });
       svg.innerHTML = html;
+      svg.querySelectorAll("circle[data-i]").forEach((c) => {
+        c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+      });
+      // Prime the note panel with the most recent point's details.
+      showNote(values.length - 1);
     })();
   </script>
 </body>
