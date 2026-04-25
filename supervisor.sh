@@ -148,6 +148,10 @@ ensure_dashboard() {
     .pill.fail { background: var(--minus-bg); color: var(--minus); border-color: #FECACA; }
     .pill.info { background: var(--accent-soft); color: var(--accent-strong); border-color: #FED7AA; }
     .empty { color: var(--muted); font-size: 12px; padding: 8px 4px; }
+    .trajectory-panel { font-size: 12.5px; color: var(--text-soft); line-height: 1.55; margin-bottom: 12px; padding: 10px 12px; background: var(--surface-muted); border: 1px solid var(--border); border-radius: 10px; }
+    .trajectory-panel ul { margin: 6px 0 0; padding-left: 18px; }
+    .trajectory-panel strong { color: var(--text); }
+    #metricChart circle.selected { stroke: #1C1917; stroke-width: 3px; }
   </style>
 </head>
 <body>
@@ -167,8 +171,14 @@ ensure_dashboard() {
   </header>
   <main>
     <section id="approach" class="panel approach">
-      <div class="approach-header"><h2>Approach summary</h2></div>
-      <div class="empty">Create <code>solution.ipynb</code> and save it &mdash; this panel will auto-summarize your preprocessing, model, and evaluation in plain English.</div>
+      <div class="approach-header">
+        <h2>Approach summary</h2>
+        <span id="approachSelectionLabel" class="approach-sub">Showing latest metric run.</span>
+      </div>
+      <div id="trajectorySummary" class="trajectory-panel"></div>
+      <div id="approachDisplay">
+        <div class="empty">Create <code>solution.ipynb</code> and save it &mdash; this panel will auto-summarize your preprocessing, model, and evaluation in plain English.</div>
+      </div>
     </section>
     <div class="panel">
       <h2>Metric trend (<span id="metricDirection">higher is better</span>) <span class="approach-dim" style="font-weight:500;text-transform:none;letter-spacing:0;">&middot; oldest on the left, newest on the right &middot; click a dot for what changed</span></h2>
@@ -179,95 +189,306 @@ ensure_dashboard() {
   </main>
   <script>
     (function () {
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function fillTrajectorySummary() {
+        const el = document.getElementById("trajectorySummary");
+        if (!el) return;
+        const tally = {};
+        document.querySelectorAll("#cards .card .churn-telemetry").forEach(function (node) {
+          const raw = node.getAttribute("data-churn");
+          if (!raw) return;
+          try {
+            const o = JSON.parse(raw);
+            Object.keys(o).forEach(function (k) {
+              const n = o[k];
+              tally[k] = (tally[k] || 0) + (typeof n === "number" ? n : 0);
+            });
+          } catch (_) {}
+        });
+        const entries = Object.keys(tally)
+          .map(function (k) {
+            return [k, tally[k]];
+          })
+          .sort(function (a, b) {
+            return b[1] - a[1];
+          })
+          .slice(0, 4);
+        if (!entries.length) {
+          el.innerHTML =
+            '<span class="approach-dim">No file-change telemetry yet. Edited files will rank here by approximate diff line counts across saves.</span>';
+          return;
+        }
+        el.innerHTML =
+          "<strong>Trajectory summary</strong> &mdash; files with the most line churn across saves:<ul>" +
+          entries
+            .map(function (row) {
+              return (
+                "<li><code>" +
+                escapeHtml(row[0]) +
+                "</code> &middot; " +
+                row[1] +
+                " line deltas (add+del)</li>"
+              );
+            })
+            .join("") +
+          "</ul>";
+      }
+
       const cards = Array.from(document.querySelectorAll("#cards .card"));
       document.getElementById("cardCount").textContent = cards.length;
-      // Cards are rendered newest-first in the DOM; reverse to get chronological order
-      // (oldest -> newest, left -> right) for the metric chart.
-      const metricCardsDom = cards.filter((c) =>
-        c.hasAttribute("data-metric") &&
-        Number.isFinite(Number(c.getAttribute("data-metric")))
-      );
+      fillTrajectorySummary();
+
+      const approachDisplay = document.getElementById("approachDisplay");
+      const approachLabel = document.getElementById("approachSelectionLabel");
+      const latestApproachHtml = approachDisplay ? approachDisplay.innerHTML : "";
+      const latestLabelText = approachLabel ? approachLabel.textContent : "";
+
+      const metricCardsDom = cards.filter(function (c) {
+        return (
+          c.hasAttribute("data-metric") &&
+          Number.isFinite(Number(c.getAttribute("data-metric")))
+        );
+      });
       const metricCards = metricCardsDom.slice().reverse();
-      const values = metricCards.map((c) => Number(c.getAttribute("data-metric")));
-      const notes  = metricCards.map((c) => c.getAttribute("data-note") || "");
-      const times  = metricCards.map((c) => {
+      const values = metricCards.map(function (c) {
+        return Number(c.getAttribute("data-metric"));
+      });
+      const notes = metricCards.map(function (c) {
+        return c.getAttribute("data-note") || "";
+      });
+      const times = metricCards.map(function (c) {
         const t = c.querySelector(".time");
         return t ? t.textContent : "";
       });
+      const snaps = metricCards.map(function (c) {
+        const sc = c.querySelector("script.approach-snap-data");
+        return sc && sc.textContent ? sc.textContent : "";
+      });
+
       const svg = document.getElementById("metricChart");
       const latestEl = document.getElementById("latestMetric");
       const latestTimeEl = document.getElementById("latestTime");
       const noteEl = document.getElementById("metricNote");
+
       if (cards.length) {
         const t = cards[0].querySelector(".time");
         if (t) latestTimeEl.textContent = t.textContent;
       }
-      if (!values.length) {
-        svg.innerHTML = '<text x="20" y="30" fill="#78716C" font-size="12">No metric values yet. Add a VAL_ACC: line to your notebook.</text>';
-        return;
-      }
-      const fmt = (v) => {
+
+      const fmt = function (v) {
         const a = Math.abs(v);
         if (a >= 100) return v.toFixed(1);
         if (a >= 1) return v.toFixed(3);
         return v.toFixed(4);
       };
-      latestEl.textContent = fmt(Math.max(...values));
-      const showNote = (i) => {
+
+      const latestIdx = function () {
+        return values.length ? values.length - 1 : -1;
+      };
+
+      function setSelectedDot(iSel) {
+        if (!svg) return;
+        svg.querySelectorAll("circle[data-i]").forEach(function (c) {
+          c.classList.remove("selected");
+          const di = Number(c.getAttribute("data-i"));
+          if (di === iSel) c.classList.add("selected");
+        });
+      }
+
+      function applyApproachForIndex(i) {
+        if (!approachDisplay) return;
+        const li = latestIdx();
+        if (i === li) {
+          approachDisplay.innerHTML = latestApproachHtml;
+          if (approachLabel) approachLabel.textContent = latestLabelText || "Showing latest metric run.";
+          return;
+        }
+        const snap = snaps[i] || "";
+        if (snap.trim()) {
+          approachDisplay.innerHTML = snap;
+        } else {
+          approachDisplay.innerHTML =
+            '<p class="empty">Approach snapshot was not stored for this run (older dashboard or summarize skipped). Use the change note under the chart.</p>';
+        }
+        if (approachLabel) {
+          approachLabel.textContent =
+            "Showing run #" +
+            (i + 1) +
+            (times[i] ? " \u00b7 " + times[i] : "") +
+            " (as of that metric).";
+        }
+      }
+
+      const showNote = function (i) {
         if (!noteEl) return;
-        const note = notes[i] ||
+        const note =
+          notes[i] ||
           (i === 0
-            ? "First recorded run — refer to the Approach summary panel above for the current pipeline."
+            ? "First recorded run \u2014 see the Approach summary for the pipeline at that point."
             : "No change note was captured for this run.");
         noteEl.innerHTML =
-          '<b>#' + (i + 1) + '</b> &middot; ' + fmt(values[i]) +
-          (times[i] ? ' &middot; <span style="color:var(--muted)">' + times[i] + '</span>' : '') +
-          '<br>' + note;
+          "<b>#" +
+          (i + 1) +
+          "</b> &middot; " +
+          fmt(values[i]) +
+          (times[i] ? ' &middot; <span style="color:var(--muted)">' + times[i] + "</span>" : "") +
+          "<br>" +
+          note;
       };
-      const w = 1000, h = 210, padL = 60, padR = 64, padT = 24, padB = 30;
-      const min = Math.min(...values), max = Math.max(...values);
-      const span = (max - min) || Math.max(1e-9, Math.abs(max) * 0.01);
-      const xOf = (i) => padL + (i * (w - padL - padR) / Math.max(values.length - 1, 1));
-      const yOf = (v) => h - padB - ((v - min) / span) * (h - padT - padB);
+
+      function selectDot(i) {
+        if (i < 0 || i >= values.length) return;
+        showNote(i);
+        applyApproachForIndex(i);
+        setSelectedDot(i);
+      }
+
+      if (!values.length) {
+        if (svg) {
+          svg.innerHTML =
+            '<text x="20" y="30" fill="#78716C" font-size="12">No metric values yet. Add a VAL_ACC: line to your notebook.</text>';
+        }
+        return;
+      }
+
+      latestEl.textContent = fmt(Math.max.apply(null, values));
+
+      const w = 1000,
+        h = 210,
+        padL = 60,
+        padR = 64,
+        padT = 24,
+        padB = 30;
+      const min = Math.min.apply(null, values),
+        max = Math.max.apply(null, values);
+      const span = max - min || Math.max(1e-9, Math.abs(max) * 0.01);
+      const xOf = function (i) {
+        return padL + (i * (w - padL - padR)) / Math.max(values.length - 1, 1);
+      };
+      const yOf = function (v) {
+        return h - padB - ((v - min) / span) * (h - padT - padB);
+      };
       const STROKE = "#F97316";
+
       if (values.length === 1) {
         const v = values[0];
         svg.innerHTML =
-          `<line class="axis" x1="${padL}" y1="${h-padB}" x2="${w-padR}" y2="${h-padB}" />` +
-          `<circle cx="${w/2}" cy="${h/2}" r="6" fill="${STROKE}" style="cursor:pointer" data-i="0" />` +
-          `<text class="pt-label latest" x="${w/2}" y="${h/2 - 16}" style="font-weight:800">${fmt(v)}</text>` +
-          `<text class="gridlabel" x="${padL}" y="${h - 8}" text-anchor="start">single observation</text>`;
-        svg.querySelectorAll("circle[data-i]").forEach((c) => {
-          c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+          '<line class="axis" x1="' +
+          padL +
+          '" y1="' +
+          (h - padB) +
+          '" x2="' +
+          (w - padR) +
+          '" y2="' +
+          (h - padB) +
+          '" />' +
+          '<circle cx="' +
+          w / 2 +
+          '" cy="' +
+          h / 2 +
+          '" r="6" fill="' +
+          STROKE +
+          '" stroke="#FFFFFF" stroke-width="2.25" style="cursor:pointer" class="selected" data-i="0" />' +
+          '<text class="pt-label latest" x="' +
+          w / 2 +
+          '" y="' +
+          (h / 2 - 16) +
+          '" style="font-weight:800">' +
+          fmt(v) +
+          "</text>" +
+          '<text class="gridlabel" x="' +
+          padL +
+          '" y="' +
+          (h - 8) +
+          '" text-anchor="start">single observation</text>';
+        svg.querySelectorAll("circle[data-i]").forEach(function (c) {
+          c.addEventListener("click", function () {
+            selectDot(Number(c.getAttribute("data-i")));
+          });
         });
-        showNote(0);
+        selectDot(0);
         return;
       }
+
       const gridLines = [min, (min + max) / 2, max];
       let html = "";
-      for (const g of gridLines) {
+      for (let gi = 0; gi < gridLines.length; gi++) {
+        const g = gridLines[gi];
         const yy = yOf(g);
         html +=
-          `<line class="axis" x1="${padL}" y1="${yy}" x2="${w-padR}" y2="${yy}" stroke-dasharray="3 4" />` +
-          `<text class="gridlabel" x="${padL - 8}" y="${yy + 3}" text-anchor="end">${fmt(g)}</text>`;
+          '<line class="axis" x1="' +
+          padL +
+          '" y1="' +
+          yy +
+          '" x2="' +
+          (w - padR) +
+          '" y2="' +
+          yy +
+          '" stroke-dasharray="3 4" />' +
+          '<text class="gridlabel" x="' +
+          (padL - 8) +
+          '" y="' +
+          (yy + 3) +
+          '" text-anchor="end">' +
+          fmt(g) +
+          "</text>";
       }
-      const pts = values.map((v, i) => `${xOf(i)},${yOf(v)}`);
-      html += `<polyline fill="none" stroke="${STROKE}" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}" />`;
-      values.forEach((v, i) => {
-        const x = xOf(i), y = yOf(v);
-        // Rightmost point is the most recent run -> bold & enlarged.
+      const pts = values.map(function (v, i) {
+        return xOf(i) + "," + yOf(v);
+      });
+      html +=
+        '<polyline fill="none" stroke="' +
+        STROKE +
+        '" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" points="' +
+        pts.join(" ") +
+        '" />';
+      values.forEach(function (v, i) {
+        const x = xOf(i),
+          y = yOf(v);
         const isLatest = i === values.length - 1;
-        html += `<circle cx="${x}" cy="${y}" r="${isLatest ? 6.5 : 3.25}" fill="${STROKE}" stroke="#FFFFFF" stroke-width="${isLatest ? 2.25 : 1.5}" style="cursor:pointer" data-i="${i}"><title>Click for change note</title></circle>`;
+        html +=
+          '<circle cx="' +
+          x +
+          '" cy="' +
+          y +
+          '" r="' +
+          (isLatest ? 6.5 : 3.25) +
+          '" fill="' +
+          STROKE +
+          '" stroke="#FFFFFF" stroke-width="' +
+          (isLatest ? 2.25 : 1.5) +
+          '" style="cursor:pointer" data-i="' +
+          i +
+          '"><title>Click for approach at this run</title></circle>';
         const aboveOK = y - padT > 20;
         const labelY = aboveOK ? y - 10 : y + 18;
-        const weight = isLatest ? ' style="font-weight:800"' : '';
-        html += `<text class="pt-label${isLatest ? " latest" : ""}"${weight} x="${x}" y="${labelY}">${fmt(v)}</text>`;
+        const weight = isLatest ? ' style="font-weight:800"' : "";
+        html +=
+          '<text class="pt-label' +
+          (isLatest ? " latest" : "") +
+          '"' +
+          weight +
+          ' x="' +
+          x +
+          '" y="' +
+          labelY +
+          '">' +
+          fmt(v) +
+          "</text>";
       });
       svg.innerHTML = html;
-      svg.querySelectorAll("circle[data-i]").forEach((c) => {
-        c.addEventListener("click", () => showNote(Number(c.getAttribute("data-i"))));
+      svg.querySelectorAll("circle[data-i]").forEach(function (c) {
+        c.addEventListener("click", function () {
+          selectDot(Number(c.getAttribute("data-i")));
+        });
       });
-      showNote(values.length - 1);
+      selectDot(values.length - 1);
     })();
   </script>
 </body>
@@ -277,7 +498,8 @@ EOF
 }
 
 append_card() {
-  # Args: title, meta_html, body_html, metric_value (optional), note (optional)
+  # Args: title, meta_html, body_html, metric_value (optional), note (optional),
+  # approach_snap_path (optional path to HTML fragment from summarize_approach.py)
   # ``note`` is attached to the card as a data-note attribute so the dashboard
   # chart can surface it when the user clicks the corresponding point.
   local title="$1"
@@ -285,11 +507,33 @@ append_card() {
   local body_html="$3"
   local metric="${4:-}"
   local note="${5:-}"
+  local snap_path="${6:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" <<'PY' "$body_html" >"$temp_file"
-import sys, pathlib, datetime, html as _h
-dash_path, title, meta, metric, note, body = sys.argv[1:7]
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" <<'PY' "$body_html" >"$temp_file"
+import re, sys, pathlib, datetime, html as _h
+
+dash_path, title, meta, metric, note, snap_path, body = sys.argv[1:8]
+
+
+def _extract_approach_snap(text: str) -> str:
+    m = re.search(
+        r"<!--BEGIN_APPROACH_DISPLAY-->(.*)<!--END_APPROACH_DISPLAY-->",
+        text,
+        flags=re.DOTALL,
+    )
+    return m.group(1).strip() if m else ""
+
+
+snap_inner = ""
+if snap_path:
+    p = pathlib.Path(snap_path)
+    if p.is_file() and p.stat().st_size > 0:
+        frag = p.read_text(encoding="utf-8")
+        snap_inner = _extract_approach_snap(frag)
+        if len(snap_inner) > 400000:
+            snap_inner = snap_inner[:400_000] + "\n<!-- truncated -->"
+
 src = pathlib.Path(dash_path).read_text(encoding="utf-8")
 anchor = '<div id="cards">'
 idx = src.find(anchor)
@@ -307,6 +551,13 @@ if idx != -1:
     if meta:
         card_lines.append(f'        <div class="meta">{meta}</div>')
     card_lines.append(body)
+    if snap_inner:
+        esc = snap_inner.replace("</script", "<\\/script")
+        card_lines.append(
+            '        <script type="text/plain" class="approach-snap-data">'
+            + esc
+            + "</script>"
+        )
     card_lines.append('      </div>')
     out = src[:insert_at] + "\n".join(card_lines) + src[insert_at:]
 # Always force utf-8 bytes to stdout so non-ASCII chars survive round-tripping on Windows.
@@ -360,7 +611,7 @@ render_change_card_body() {
   local body_file
   body_file="$(mktemp)"
   PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$SNAPSHOT_DIR" "$ROOT_DIR" "$MAX_DIFF_LINES_PER_FILE" >"$body_file" <<'PY'
-import difflib, html, os, sys, pathlib, filecmp
+import difflib, html, json, os, sys, pathlib, filecmp
 
 snap, root, max_lines = sys.argv[1], sys.argv[2], int(sys.argv[3])
 SKIP_DIRS = {".git", ".supervisor_snapshot", "__pycache__"}
@@ -553,6 +804,15 @@ if removed_names:
 parts.append(f'<span class="plus">+{total_added}</span> / <span class="minus">-{total_removed}</span>')
 summary = " \u00b7 ".join(parts)
 
+# Per-file line churn for trajectory summary (dashboard JS aggregates data-churn).
+_churn = {}
+for _st, _rel, _ad, _rm, _dh in changes:
+    _churn[_rel] = _churn.get(_rel, 0) + int(_ad) + int(_rm)
+_top = sorted(_churn.items(), key=lambda kv: -kv[1])[:12]
+_churn_json = json.dumps(dict(_top), separators=(",", ":"))
+if len(_churn_json) > 1800:
+    _churn_json = json.dumps(dict(_top[:6]), separators=(",", ":"))
+
 # Human-friendly title for the card. Single-file actions get a specific verb.
 def _title():
     n = len(changes)
@@ -571,7 +831,7 @@ def _title():
 
 # The shell caller reads the TITLE= line and strips it before inserting the rest as body.
 print(f'TITLE={_title()}')
-print(f'        <div class="meta">{summary}</div>')
+print(f'        <div class="meta">{summary}<span class="churn-telemetry" hidden data-churn="{html.escape(_churn_json, quote=True)}"></span></div>')
 
 # Collapsed list of per-file diffs.
 print('        <details>')
@@ -749,6 +1009,18 @@ run_notebook_and_log_metric() {
   set -e
   max_acc="$(printf "%s\n" "$output" | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)"
   [[ -z "${max_acc:-}" ]] && max_acc="NA"
+  # Snapshot approach summary for this metric dot (same notebook state as the run).
+  local snap_tmp=""
+  snap_tmp="$(mktemp)"
+  if [[ -f "$APPROACH_HELPER" ]] && [[ -f "$NOTEBOOK_PATH" ]]; then
+    if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$snap_tmp" 2>/dev/null; then
+      rm -f "$snap_tmp"
+      snap_tmp=""
+    fi
+  else
+    rm -f "$snap_tmp"
+    snap_tmp=""
+  fi
   # Tail the output to keep the card compact.
   local tail_output
   tail_output="$(printf "%s\n" "$output" | tail -n "$MAX_OUTPUT_LINES")"
@@ -765,11 +1037,12 @@ run_notebook_and_log_metric() {
   local meta
   if [[ "$max_acc" == "NA" ]]; then
     meta="$pill <code>MAX_VALIDATION_ACCURACY=NA</code> â€“ add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
-    append_card "Notebook Metric" "$meta" "$body" "" "$change_note"
+    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp"
   else
     meta="$pill <code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
-    append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note"
+    append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp"
   fi
+  [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
   # Persist the current notebook as the baseline for the next metric run so the
   # next compute_notebook_change_note diffs against this run. Copy silently; if
   # cp fails we simply lose the note next time, which is acceptable.
