@@ -108,6 +108,7 @@ ensure_dashboard() {
     .card .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-left: auto; }
     .card .meta { color: var(--text-soft); font-size: 12.5px; margin: 6px 0 0; word-break: break-word; }
     .card .meta code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; color: var(--code-fg); font-size: 11.5px; font-family: ui-monospace, Menlo, Consolas, monospace; border: 1px solid #FED7AA; }
+    .muted { color: var(--muted); font-size: 12px; }
 
     /* Approach summary ------------------------------------------------- */
     .approach .approach-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -199,45 +200,60 @@ ensure_dashboard() {
       function fillTrajectorySummary() {
         const el = document.getElementById("trajectorySummary");
         if (!el) return;
-        const tally = {};
-        document.querySelectorAll("#cards .card .churn-telemetry").forEach(function (node) {
-          const raw = node.getAttribute("data-churn");
-          if (!raw) return;
-          try {
-            const o = JSON.parse(raw);
-            Object.keys(o).forEach(function (k) {
-              const n = o[k];
-              tally[k] = (tally[k] || 0) + (typeof n === "number" ? n : 0);
-            });
-          } catch (_) {}
+        const metricCards = Array.from(document.querySelectorAll("#cards .card")).filter(function (c) {
+          return (
+            c.hasAttribute("data-metric") &&
+            Number.isFinite(Number(c.getAttribute("data-metric")))
+          );
         });
-        const entries = Object.keys(tally)
-          .map(function (k) {
-            return [k, tally[k]];
-          })
-          .sort(function (a, b) {
-            return b[1] - a[1];
-          })
-          .slice(0, 4);
-        if (!entries.length) {
+        const chronological = metricCards.slice().reverse();
+        if (!chronological.length) {
           el.innerHTML =
-            '<span class="approach-dim">No file-change telemetry yet. Edited files will rank here by approximate diff line counts across saves.</span>';
+            '<span class="approach-dim">No metric runs yet. Save <code>solution.ipynb</code> with <code>VAL_ACC:</code> (or <code>validation_accuracy:</code>) in the output to build a trajectory.</span>';
+          return;
+        }
+        let best = -Infinity;
+        const items = [];
+        for (let i = 0; i < chronological.length; i++) {
+          const c = chronological[i];
+          const v = Number(c.getAttribute("data-metric"));
+          if (!Number.isFinite(v)) continue;
+          if (v > best) {
+            best = v;
+            const note = (c.getAttribute("data-note") || "").trim();
+            const tEl = c.querySelector(".time");
+            const ts = tEl ? tEl.textContent.trim() : "";
+            const prose =
+              note ||
+              "Notebook run set a new best validation accuracy (" + String(v) + ").";
+            items.push(
+              "<li><span class=\"approach-dim\">" +
+                escapeHtml(ts) +
+                "</span> &mdash; " +
+                escapeHtml(prose) +
+                ' <span class="approach-dim">(' +
+                escapeHtml(String(v)) +
+                ")</span></li>"
+            );
+          }
+        }
+        const cap = 12;
+        let tailNote = "";
+        if (items.length > cap) {
+          tailNote =
+            '<p class="approach-dim" style="margin:8px 0 0">Earlier improvements omitted.</p>';
+          while (items.length > cap) items.shift();
+        }
+        if (!items.length) {
+          el.innerHTML =
+            '<span class="approach-dim">No new bests yet &mdash; validation accuracy has not strictly increased since the first logged run.</span>';
           return;
         }
         el.innerHTML =
-          "<strong>Trajectory summary</strong> &mdash; files with the most line churn across saves:<ul>" +
-          entries
-            .map(function (row) {
-              return (
-                "<li><code>" +
-                escapeHtml(row[0]) +
-                "</code> &middot; " +
-                row[1] +
-                " line deltas (add+del)</li>"
-              );
-            })
-            .join("") +
-          "</ul>";
+          "<strong>Trajectory summary</strong> &mdash; each time validation accuracy reached a new high, the change that preceded it was:<ul>" +
+          items.join("") +
+          "</ul>" +
+          tailNote;
       }
 
       const cards = Array.from(document.querySelectorAll("#cards .card"));
@@ -768,23 +784,6 @@ removed_names = [c[1] for c in changes if c[0] == "removed"]
 total_added = sum(c[2] for c in changes)
 total_removed = sum(c[3] for c in changes)
 
-# Detect who made the change. Priority:
-#   1. Explicit AICODINGGYM_ACTOR env var (e.g. set by wrapper scripts).
-#   2. Heuristic: a touched .log/*.md session-log file implies the AI agent
-#      (only agents write session logs per AGENTS.md).
-_actor = (os.environ.get("AICODINGGYM_ACTOR") or "").strip().lower() or None
-if _actor is None:
-    _log_touched = any(
-        c[1].startswith(".log/") and c[1].endswith(".md") for c in changes
-    )
-    _actor = "ai" if _log_touched else "human"
-if _actor == "ai":
-    _actor_pill = '<span class="pill info">by ai</span>'
-elif _actor == "human":
-    _actor_pill = '<span class="pill ok">by human</span>'
-else:
-    _actor_pill = f'<span class="pill">by {html.escape(_actor)}</span>'
-
 def _fmt_names(names, limit=3):
     if not names:
         return ""
@@ -794,7 +793,7 @@ def _fmt_names(names, limit=3):
         shown.append(f'<span class="muted">+{extra} more</span>')
     return ", ".join(shown)
 
-parts = [_actor_pill]
+parts = []
 if added_names:
     parts.append(f'<span class="plus">added</span> {_fmt_names(added_names)}')
 if modified_names:
@@ -803,15 +802,6 @@ if removed_names:
     parts.append(f'<span class="minus">removed</span> {_fmt_names(removed_names)}')
 parts.append(f'<span class="plus">+{total_added}</span> / <span class="minus">-{total_removed}</span>')
 summary = " \u00b7 ".join(parts)
-
-# Per-file line churn for trajectory summary (dashboard JS aggregates data-churn).
-_churn = {}
-for _st, _rel, _ad, _rm, _dh in changes:
-    _churn[_rel] = _churn.get(_rel, 0) + int(_ad) + int(_rm)
-_top = sorted(_churn.items(), key=lambda kv: -kv[1])[:12]
-_churn_json = json.dumps(dict(_top), separators=(",", ":"))
-if len(_churn_json) > 1800:
-    _churn_json = json.dumps(dict(_top[:6]), separators=(",", ":"))
 
 # Human-friendly title for the card. Single-file actions get a specific verb.
 def _title():
@@ -831,13 +821,13 @@ def _title():
 
 # The shell caller reads the TITLE= line and strips it before inserting the rest as body.
 print(f'TITLE={_title()}')
-print(f'        <div class="meta">{summary}<span class="churn-telemetry" hidden data-churn="{html.escape(_churn_json, quote=True)}"></span></div>')
+print(f'        <div class="meta">{summary}</div>')
 
 # Collapsed list of per-file diffs.
 print('        <details>')
 print('          <summary>Show per-file diffs</summary>')
 for status, rel, added, removed, diff_html in changes:
-    badge = {"added":"<span class=\"pill ok\">added</span>", "removed":"<span class=\"pill fail\">removed</span>", "modified":"<span class=\"pill info\">modified</span>"}[status]
+    badge = {"added":"<span class=\"pill info\">added</span>", "removed":"<span class=\"pill fail\">removed</span>", "modified":"<span class=\"pill info\">modified</span>"}[status]
     header = f'{badge} <code>{html.escape(rel)}</code>'
     if added or removed:
         header += f' <span class="plus">+{added}</span> / <span class="minus">-{removed}</span>'
@@ -1028,18 +1018,15 @@ run_notebook_and_log_metric() {
   body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
     "$MAX_OUTPUT_LINES" \
     "$(printf "%s" "$tail_output" | html_escape)")"
-  local pill
-  if [[ "$status" -eq 0 ]]; then
-    pill='<span class="pill ok">ok</span>'
-  else
-    pill='<span class="pill fail">exit '"$status"'</span>'
-  fi
   local meta
-  if [[ "$max_acc" == "NA" ]]; then
-    meta="$pill <code>MAX_VALIDATION_ACCURACY=NA</code> â€“ add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
+  if [[ "$status" -ne 0 ]]; then
+    meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
+    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp"
+  elif [[ "$max_acc" == "NA" ]]; then
+    meta="<code>MAX_VALIDATION_ACCURACY=NA</code> â€“ add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp"
   else
-    meta="$pill <code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
+    meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp"
   fi
   [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
@@ -1062,7 +1049,7 @@ run_wrapped_command() {
   set -e
 
   sleep 1
-  local raw_body title body pill meta
+  local raw_body title body meta
   raw_body="$(render_change_card_body)"
   title="$(printf "%s" "$raw_body" | head -n1)"
   if [[ "$title" == TITLE=* ]]; then
@@ -1073,11 +1060,10 @@ run_wrapped_command() {
     body="$raw_body"
   fi
   if [[ "$status" -eq 0 ]]; then
-    pill='<span class="pill ok">ok</span>'
+    meta="<code>$(printf "%s" "$command" | html_escape)</code>"
   else
-    pill='<span class="pill fail">exit '"$status"'</span>'
+    meta='<span class="pill fail">exit '"$status"'</span> <code>'"$(printf "%s" "$command" | html_escape)"'</code>'
   fi
-  meta="$pill <code>$(printf "%s" "$command" | html_escape)</code>"
   append_card "$title" "$meta" "$body"
 
   local tail_output
@@ -1143,17 +1129,17 @@ submit_flow() {
   set -e
   ground_truth="$(printf "%s\n" "$output" | grep -oEi 'ground[ _-]?truth[^0-9]*[0-9]+(\.[0-9]+)?' | head -n1 || true)"
   [[ -z "${ground_truth:-}" ]] && ground_truth="Ground Truth: not found in output"
-  local pill
+  local meta
   if [[ "$status" -eq 0 ]]; then
-    pill='<span class="pill ok">submitted</span>'
+    meta='<span class="muted">Submitted</span>'
   else
-    pill='<span class="pill fail">submit failed (exit '"$status"')</span>'
+    meta='<span class="pill fail">Submit failed (exit '"$status"')</span>'
   fi
   local body
   body="$(printf '        <div class="meta">%s</div>\n        <details open>\n          <summary>Show submit log</summary>\n          <pre>%s</pre>\n        </details>' \
     "$(printf "%s" "$ground_truth" | html_escape)" \
     "$(printf "%s" "$output" | html_escape)")"
-  append_card "Final Result" "$pill" "$body"
+  append_card "Final Result" "$meta" "$body"
   open_dashboard
 }
 

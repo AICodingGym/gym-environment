@@ -64,6 +64,7 @@
     .card .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-left: auto; }
     .card .meta { color: var(--text-soft); font-size: 12.5px; margin: 6px 0 0; word-break: break-word; }
     .card .meta code { background: var(--code-bg); padding: 1px 6px; border-radius: 5px; color: var(--code-fg); font-size: 11.5px; font-family: ui-monospace, Menlo, Consolas, monospace; border: 1px solid #FED7AA; }
+    .muted { color: var(--muted); font-size: 12px; }
 
     /* Approach summary ------------------------------------------------- */
     .approach .approach-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -155,45 +156,60 @@
       function fillTrajectorySummary() {
         const el = document.getElementById("trajectorySummary");
         if (!el) return;
-        const tally = {};
-        document.querySelectorAll("#cards .card .churn-telemetry").forEach(function (node) {
-          const raw = node.getAttribute("data-churn");
-          if (!raw) return;
-          try {
-            const o = JSON.parse(raw);
-            Object.keys(o).forEach(function (k) {
-              const n = o[k];
-              tally[k] = (tally[k] || 0) + (typeof n === "number" ? n : 0);
-            });
-          } catch (_) {}
+        const metricCards = Array.from(document.querySelectorAll("#cards .card")).filter(function (c) {
+          return (
+            c.hasAttribute("data-metric") &&
+            Number.isFinite(Number(c.getAttribute("data-metric")))
+          );
         });
-        const entries = Object.keys(tally)
-          .map(function (k) {
-            return [k, tally[k]];
-          })
-          .sort(function (a, b) {
-            return b[1] - a[1];
-          })
-          .slice(0, 4);
-        if (!entries.length) {
+        const chronological = metricCards.slice().reverse();
+        if (!chronological.length) {
           el.innerHTML =
-            '<span class="approach-dim">No file-change telemetry yet. Edited files will rank here by approximate diff line counts across saves.</span>';
+            '<span class="approach-dim">No metric runs yet. Save <code>solution.ipynb</code> with <code>VAL_ACC:</code> (or <code>validation_accuracy:</code>) in the output to build a trajectory.</span>';
+          return;
+        }
+        let best = -Infinity;
+        const items = [];
+        for (let i = 0; i < chronological.length; i++) {
+          const c = chronological[i];
+          const v = Number(c.getAttribute("data-metric"));
+          if (!Number.isFinite(v)) continue;
+          if (v > best) {
+            best = v;
+            const note = (c.getAttribute("data-note") || "").trim();
+            const tEl = c.querySelector(".time");
+            const ts = tEl ? tEl.textContent.trim() : "";
+            const prose =
+              note ||
+              "Notebook run set a new best validation accuracy (" + String(v) + ").";
+            items.push(
+              "<li><span class=\"approach-dim\">" +
+                escapeHtml(ts) +
+                "</span> &mdash; " +
+                escapeHtml(prose) +
+                ' <span class="approach-dim">(' +
+                escapeHtml(String(v)) +
+                ")</span></li>"
+            );
+          }
+        }
+        const cap = 12;
+        let tailNote = "";
+        if (items.length > cap) {
+          tailNote =
+            '<p class="approach-dim" style="margin:8px 0 0">Earlier improvements omitted.</p>';
+          while (items.length > cap) items.shift();
+        }
+        if (!items.length) {
+          el.innerHTML =
+            '<span class="approach-dim">No new bests yet &mdash; validation accuracy has not strictly increased since the first logged run.</span>';
           return;
         }
         el.innerHTML =
-          "<strong>Trajectory summary</strong> &mdash; files with the most line churn across saves:<ul>" +
-          entries
-            .map(function (row) {
-              return (
-                "<li><code>" +
-                escapeHtml(row[0]) +
-                "</code> &middot; " +
-                row[1] +
-                " line deltas (add+del)</li>"
-              );
-            })
-            .join("") +
-          "</ul>";
+          "<strong>Trajectory summary</strong> &mdash; each time validation accuracy reached a new high, the change that preceded it was:<ul>" +
+          items.join("") +
+          "</ul>" +
+          tailNote;
       }
 
       const cards = Array.from(document.querySelectorAll("#cards .card"));
