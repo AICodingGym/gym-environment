@@ -9,21 +9,20 @@ FLOAT_RE = r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?"
 
 
 def execute_notebook(notebook_path: Path) -> str:
-    cmd = [
-        "jupyter",
-        "nbconvert",
-        "--to",
-        "notebook",
-        "--execute",
-        str(notebook_path),
-        "--inplace",
-    ]
-    run = subprocess.run(cmd, capture_output=True, text=True)
-    combined = (run.stdout or "") + "\n" + (run.stderr or "")
-    print(combined.strip())
-    if run.returncode != 0:
-        raise RuntimeError("Notebook execution failed")
-    return combined
+    """Run nbconvert --execute; try ``jupyter`` then ``python -m jupyter`` (Windows)."""
+    nb = str(notebook_path)
+    variants = (
+        ["jupyter", "nbconvert", "--to", "notebook", "--execute", nb, "--inplace"],
+        [sys.executable, "-m", "jupyter", "nbconvert", "--to", "notebook", "--execute", nb, "--inplace"],
+    )
+    last_combined = ""
+    for cmd in variants:
+        run = subprocess.run(cmd, capture_output=True, text=True)
+        last_combined = (run.stdout or "") + "\n" + (run.stderr or "")
+        if run.returncode == 0:
+            print(last_combined.strip())
+            return last_combined
+    raise RuntimeError(last_combined.strip() or "Notebook execution failed (jupyter nbconvert)")
 
 
 def extract_values_from_text(text: str) -> list[float]:
@@ -72,17 +71,19 @@ def main() -> int:
         print(f"Notebook not found: {notebook_path}", file=sys.stderr)
         return 2
 
+    combined = ""
+    exec_ok = False
     try:
-        stdout_text = execute_notebook(notebook_path)
+        combined = execute_notebook(notebook_path)
+        exec_ok = True
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
-        return 1
 
-    values = extract_values_from_text(stdout_text)
+    values = extract_values_from_text(combined)
     values.extend(extract_values_from_notebook(notebook_path))
     if not values:
         print("MAX_VALIDATION_ACCURACY=NA")
-        return 0
+        return 0 if exec_ok else 1
 
     print(f"MAX_VALIDATION_ACCURACY={max(values):.10g}")
     return 0

@@ -11,6 +11,9 @@
 #   * First run after fetch shows a "Supervisor Ready" card, never the
 #     entire workspace as a "+everything" diff.
 #   * Idempotent: re-running is safe; the lock file prevents doubles.
+#
+# Canonical copy: publish via gym-environment on GitHub; the CLI vendors
+# templates/supervisor.sh.template derived from this file (placeholder commands).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1205,6 +1208,12 @@ watch_loop() {
   else
     append_card "Watcher Restarted" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s" '        <div class="empty">Resuming watch mode.</div>'
   fi
+  # One metric pass at startup so the chart + trajectory + approach snapshot
+  # populate without waiting for a file-change event (nbconvert may be slow).
+  if [[ -f "$NOTEBOOK_PATH" ]]; then
+    run_notebook_and_log_metric
+  fi
+  snapshot_workspace
   while true; do
     sleep "$WATCH_INTERVAL"
     # Check whether any file actually changed before doing expensive work.
