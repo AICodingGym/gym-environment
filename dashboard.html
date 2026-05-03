@@ -109,6 +109,13 @@
     .trajectory-panel ul { margin: 6px 0 0; padding-left: 18px; }
     .trajectory-panel strong { color: var(--text); }
     #metricChart circle.selected { stroke: #1C1917; stroke-width: 3px; }
+    .clarity-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 12px; margin-top: 10px; margin-bottom: 10px; }
+    .clarity-box { border: 1px solid var(--border); background: var(--surface-muted); border-radius: 10px; padding: 10px 12px; }
+    .clarity-box h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .clarity-box ul { margin: 0; padding-left: 16px; }
+    .clarity-box li { margin: 2px 0; font-size: 12.5px; color: var(--text-soft); }
+    .ai-source { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    @media (max-width: 880px) { .clarity-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -212,9 +219,59 @@
           tailNote;
       }
 
+      function renderClarityPanels() {
+        const changeCards = Array.from(document.querySelectorAll("#cards .card[data-change]"));
+        changeCards.forEach(function (card) {
+          if (card.querySelector(".clarity-grid")) return;
+          const raw = card.getAttribute("data-change") || "";
+          if (!raw) return;
+          let change = null;
+          try {
+            change = JSON.parse(raw);
+          } catch (_) {
+            return;
+          }
+          const counts = change.counts || {};
+          const churn = change.line_churn || {};
+          const files = Array.isArray(change.files) ? change.files.slice(0, 6) : [];
+          const aiSummary = (card.getAttribute("data-ai-summary") || "").trim();
+          const aiSource = (card.getAttribute("data-ai-source") || "").trim();
+          const aiStatus = (card.getAttribute("data-ai-status") || "").trim();
+          const left = [
+            '<div class="clarity-box">',
+            "<h4>Change details</h4>",
+            "<ul>",
+            "<li><b>Statuses:</b> added " + Number(counts.added || 0) + ", modified " + Number(counts.modified || 0) + ", removed " + Number(counts.removed || 0) + "</li>",
+            "<li><b>Line churn:</b> +" + Number(churn.added || 0) + " / -" + Number(churn.removed || 0) + "</li>",
+            files.length
+              ? "<li><b>Top files:</b> " + files.map(function (f) { return "<code>" + escapeHtml(String(f.path || "?")) + "</code>"; }).join(", ") + "</li>"
+              : "<li><b>Top files:</b> none</li>",
+            "</ul>",
+            "</div>"
+          ].join("");
+          const right = [
+            '<div class="clarity-box">',
+            "<h4>AI explanation</h4>",
+            '<div class="meta">' + escapeHtml(aiSummary || "No AI summary available for this change.") + "</div>",
+            '<div class="ai-source">source: <b>' + escapeHtml(aiSource || "unknown") + "</b>" + (aiStatus ? " · status: " + escapeHtml(aiStatus) : "") + "</div>",
+            "</div>"
+          ].join("");
+          const grid = document.createElement("div");
+          grid.className = "clarity-grid";
+          grid.innerHTML = left + right;
+          const row = card.querySelector(".row");
+          if (row && row.parentNode) {
+            row.insertAdjacentElement("afterend", grid);
+          } else {
+            card.prepend(grid);
+          }
+        });
+      }
+
       const cards = Array.from(document.querySelectorAll("#cards .card"));
       document.getElementById("cardCount").textContent = cards.length;
       fillTrajectorySummary();
+      renderClarityPanels();
 
       const approachDisplay = document.getElementById("approachDisplay");
       const approachLabel = document.getElementById("approachSelectionLabel");

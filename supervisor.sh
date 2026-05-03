@@ -25,6 +25,7 @@ SUBMIT_CMD="aicodinggym mle submit <competition_or_problem_id> -F submission.csv
 WATCH_INTERVAL=3
 MAX_DIFF_LINES_PER_FILE=200
 MAX_OUTPUT_LINES=200
+MAX_AI_SUMMARY_CHARS=700
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -524,12 +525,16 @@ append_card() {
   local metric="${4:-}"
   local note="${5:-}"
   local snap_path="${6:-}"
+  local change_json="${7:-}"
+  local ai_summary="${8:-}"
+  local ai_source="${9:-}"
+  local ai_status="${10:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" <<'PY' "$body_html" >"$temp_file"
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" <<'PY' "$body_html" >"$temp_file"
 import re, sys, pathlib, datetime, html as _h
 
-dash_path, title, meta, metric, note, snap_path, body = sys.argv[1:8]
+dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, body = sys.argv[1:12]
 
 
 def _extract_approach_snap(text: str) -> str:
@@ -562,6 +567,14 @@ if idx != -1:
         attrs += f' data-metric="{metric}"'
     if note:
         attrs += f' data-note="{_h.escape(note, quote=True)}"'
+    if change_json:
+        attrs += f' data-change="{_h.escape(change_json, quote=True)}"'
+    if ai_summary:
+        attrs += f' data-ai-summary="{_h.escape(ai_summary, quote=True)}"'
+    if ai_source:
+        attrs += f' data-ai-source="{_h.escape(ai_source, quote=True)}"'
+    if ai_status:
+        attrs += f' data-ai-status="{_h.escape(ai_status, quote=True)}"'
     card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
@@ -821,6 +834,16 @@ def _title():
 
 # The shell caller reads the TITLE= line and strips it before inserting the rest as body.
 print(f'TITLE={_title()}')
+change_payload = {
+    "title": _title(),
+    "counts": {"added": len(added_names), "modified": len(modified_names), "removed": len(removed_names)},
+    "line_churn": {"added": total_added, "removed": total_removed},
+    "files": [
+        {"status": status, "path": rel, "added_lines": added, "removed_lines": removed}
+        for status, rel, added, removed, _ in changes
+    ],
+}
+print(f'CHANGE_JSON={json.dumps(change_payload, ensure_ascii=False)}')
 print(f'        <div class="meta">{summary}</div>')
 
 # Collapsed list of per-file diffs.
@@ -841,18 +864,92 @@ PY
   rm -f "$body_file"
 }
 
-# Read the TITLE= header line out of the body text produced above.
-# Echoes ("title"\n"body") on stdout; caller reads with two `read` calls.
-split_change_output() {
-  local full="$1"
-  local title="${2:-Change Detected}"
-  local first_line
-  first_line="$(printf "%s\n" "$full" | head -n1)"
-  if [[ "$first_line" == TITLE=* ]]; then
-    title="${first_line#TITLE=}"
-    full="$(printf "%s\n" "$full" | tail -n +2)"
-  fi
-  printf '%s\n---END-OF-TITLE---\n%s' "$title" "$full"
+hybrid_change_summary() {
+  local change_json="$1"
+  local out_file
+  out_file="$(mktemp)"
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$change_json" "$MAX_AI_SUMMARY_CHARS" >"$out_file" <<'PY'
+import json, os, sys, urllib.request, urllib.error
+
+raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+cap = int(sys.argv[2]) if len(sys.argv) > 2 else 700
+
+def out(source: str, status: str, text: str) -> None:
+    text = (text or "").strip()
+    if len(text) > cap:
+        text = text[:cap - 3].rstrip() + "..."
+    print(f"SOURCE={source}")
+    print(f"STATUS={status}")
+    print("TEXT=" + text.replace("\n", " "))
+
+try:
+    change = json.loads(raw) if raw else {}
+except json.JSONDecodeError:
+    change = {}
+
+files = change.get("files") or []
+counts = change.get("counts") or {}
+churn = change.get("line_churn") or {}
+n = len(files)
+added = int(churn.get("added") or 0)
+removed = int(churn.get("removed") or 0)
+top = ", ".join(f.get("path", "?") for f in files[:3]) if files else "no files"
+fallback = (
+    f"Change set touched {n} file(s): {top}. "
+    f"Status mix added={counts.get('added', 0)}, modified={counts.get('modified', 0)}, removed={counts.get('removed', 0)}. "
+    f"Approximate line churn is +{added}/-{removed}. "
+    "Likely intent: iterate on implementation details and validate impact in the next metric run."
+)
+
+endpoint = os.environ.get("AICODINGGYM_LLM_ENDPOINT", "").strip()
+api_key = os.environ.get("AICODINGGYM_LLM_API_KEY", "").strip()
+model = os.environ.get("AICODINGGYM_LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+timeout = float(os.environ.get("AICODINGGYM_LLM_TIMEOUT_SEC", "3.0") or "3.0")
+if not endpoint or not api_key:
+    out("fallback", "no_llm_config", fallback)
+    raise SystemExit(0)
+
+prompt = (
+    "Summarize this code change for an MLE bench dashboard in 2 concise sentences. "
+    "Sentence 1: what changed concretely. Sentence 2: why it likely matters for model quality or reliability. "
+    "Use plain language, no markdown bullets.\n\n"
+    + json.dumps(change, ensure_ascii=False)
+)
+payload = {
+    "model": model,
+    "messages": [
+        {"role": "system", "content": "You summarize MLE bench code changes clearly."},
+        {"role": "user", "content": prompt},
+    ],
+    "temperature": 0.2,
+}
+data = json.dumps(payload).encode("utf-8")
+req = urllib.request.Request(
+    endpoint,
+    data=data,
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+    parsed = json.loads(body)
+    text = (
+        (((parsed.get("choices") or [{}])[0].get("message") or {}).get("content"))
+        or ""
+    ).strip()
+    if not text:
+        out("fallback", "llm_empty", fallback)
+    else:
+        out("llm", "ok", text)
+except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, KeyError, json.JSONDecodeError):
+    out("fallback", "llm_error", fallback)
+PY
+  cat "$out_file"
+  rm -f "$out_file"
 }
 
 # Re-render the "Approach summary" panel from the current notebook contents and
@@ -1049,22 +1146,32 @@ run_wrapped_command() {
   set -e
 
   sleep 1
-  local raw_body title body meta
+  local raw_body title body meta change_json summary_meta ai_source ai_status ai_text
   raw_body="$(render_change_card_body)"
-  title="$(printf "%s" "$raw_body" | head -n1)"
+  title="$(printf "%s\n" "$raw_body" | head -n1)"
+  change_json="$(printf "%s\n" "$raw_body" | sed -n '2p')"
   if [[ "$title" == TITLE=* ]]; then
     title="${title#TITLE=}"
-    body="$(printf "%s\n" "$raw_body" | tail -n +2)"
+    body="$(printf "%s\n" "$raw_body" | tail -n +3)"
   else
     title="AI Run"
     body="$raw_body"
   fi
+  if [[ "$change_json" == CHANGE_JSON=* ]]; then
+    change_json="${change_json#CHANGE_JSON=}"
+  else
+    change_json=""
+  fi
+  summary_meta="$(hybrid_change_summary "$change_json")"
+  ai_source="$(printf "%s\n" "$summary_meta" | sed -n 's/^SOURCE=//p' | head -n1)"
+  ai_status="$(printf "%s\n" "$summary_meta" | sed -n 's/^STATUS=//p' | head -n1)"
+  ai_text="$(printf "%s\n" "$summary_meta" | sed -n 's/^TEXT=//p' | head -n1)"
   if [[ "$status" -eq 0 ]]; then
     meta="<code>$(printf "%s" "$command" | html_escape)</code>"
   else
     meta='<span class="pill fail">exit '"$status"'</span> <code>'"$(printf "%s" "$command" | html_escape)"'</code>'
   fi
-  append_card "$title" "$meta" "$body"
+  append_card "$title" "$meta" "$body" "" "" "" "$change_json" "$ai_text" "$ai_source" "$ai_status"
 
   local tail_output
   tail_output="$(printf "%s\n" "$command_output" | tail -n "$MAX_OUTPUT_LINES")"
@@ -1101,20 +1208,30 @@ watch_loop() {
   while true; do
     sleep "$WATCH_INTERVAL"
     # Check whether any file actually changed before doing expensive work.
-    local raw title body
+    local raw title body change_json summary_meta ai_source ai_status ai_text
     raw="$(render_change_card_body)"
     if [[ "$raw" == *"No file changes detected."* ]]; then
       continue
     fi
-    title="$(printf "%s" "$raw" | head -n1)"
+    title="$(printf "%s\n" "$raw" | head -n1)"
+    change_json="$(printf "%s\n" "$raw" | sed -n '2p')"
     if [[ "$title" == TITLE=* ]]; then
       title="${title#TITLE=}"
-      body="$(printf "%s\n" "$raw" | tail -n +2)"
+      body="$(printf "%s\n" "$raw" | tail -n +3)"
     else
       title="Change Detected"
       body="$raw"
     fi
-    append_card "$title" "" "$body"
+    if [[ "$change_json" == CHANGE_JSON=* ]]; then
+      change_json="${change_json#CHANGE_JSON=}"
+    else
+      change_json=""
+    fi
+    summary_meta="$(hybrid_change_summary "$change_json")"
+    ai_source="$(printf "%s\n" "$summary_meta" | sed -n 's/^SOURCE=//p' | head -n1)"
+    ai_status="$(printf "%s\n" "$summary_meta" | sed -n 's/^STATUS=//p' | head -n1)"
+    ai_text="$(printf "%s\n" "$summary_meta" | sed -n 's/^TEXT=//p' | head -n1)"
+    append_card "$title" "" "$body" "" "" "" "$change_json" "$ai_text" "$ai_source" "$ai_status"
     run_notebook_and_log_metric
     snapshot_workspace
   done
