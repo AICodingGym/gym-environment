@@ -12,4 +12,5 @@ and logging requirements.
   - Code Review: `aicodinggym cr fetch/submit <id>`
 - **Do not directly search on websites or online resources for solutions**
 - **Do not modify test files**
+- **For MLE-bench:** write `.agent_note.json` with `change_summary` and `why` before saving each significant change — see [AGENTS.md](./AGENTS.md#change-logging-required-for-mle-bench) for the protocol
 - For MLE-bench: follow the experiment logging rules in [AGENTS.md](./AGENTS.md#mle-bench-experiment-logging-required)

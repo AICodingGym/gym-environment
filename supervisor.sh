@@ -29,6 +29,37 @@ WATCH_INTERVAL=3
 MAX_DIFF_LINES_PER_FILE=200
 MAX_OUTPUT_LINES=200
 MAX_AI_SUMMARY_CHARS=700
+AGENT_NOTE_PATH="$ROOT_DIR/.agent_note.json"
+
+read_agent_note() {
+  AGENT_SUMMARY=""
+  AGENT_WHY=""
+  AGENT_APPROACH=""
+  AGENT_STAGE=""
+  AGENT_IMPACT=""
+  [[ -f "$AGENT_NOTE_PATH" ]] || return 0
+  local parsed
+  parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
+import json, sys, pathlib
+try:
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+mapping = [
+    ("change_summary", "AGENT_SUMMARY"),
+    ("why",            "AGENT_WHY"),
+    ("approach_description", "AGENT_APPROACH"),
+    ("stage_label",    "AGENT_STAGE"),
+    ("impact",         "AGENT_IMPACT"),
+]
+for key, var in mapping:
+    val = str(data.get(key, "")).replace("\n", " ").replace("'", "'\\''")
+    print(f"{var}='{val}'")
+PY
+  )" || true
+  [[ -n "$parsed" ]] && eval "$parsed"
+  rm -f "$AGENT_NOTE_PATH"
+}
 
 timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -519,9 +550,9 @@ EOF
 
 append_card() {
   # Args: title, meta_html, body_html, metric_value (optional), note (optional),
-  # approach_snap_path (optional path to HTML fragment from summarize_approach.py)
-  # ``note`` is attached to the card as a data-note attribute so the dashboard
-  # chart can surface it when the user clicks the corresponding point.
+  # approach_snap_path (optional), change_json (optional), ai_summary (optional),
+  # ai_source (optional), ai_status (optional), why (optional), stage (optional),
+  # impact (optional: low|medium|high)
   local title="$1"
   local meta="$2"
   local body_html="$3"
@@ -532,12 +563,15 @@ append_card() {
   local ai_summary="${8:-}"
   local ai_source="${9:-}"
   local ai_status="${10:-}"
+  local why="${11:-}"
+  local stage="${12:-}"
+  local impact="${13:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" <<'PY' "$body_html" >"$temp_file"
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" <<'PY' "$body_html" >"$temp_file"
 import re, sys, pathlib, datetime, html as _h
 
-dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, body = sys.argv[1:12]
+dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, body = sys.argv[1:15]
 
 
 def _extract_approach_snap(text: str) -> str:
@@ -578,6 +612,12 @@ if idx != -1:
         attrs += f' data-ai-source="{_h.escape(ai_source, quote=True)}"'
     if ai_status:
         attrs += f' data-ai-status="{_h.escape(ai_status, quote=True)}"'
+    if why:
+        attrs += f' data-why="{_h.escape(why, quote=True)}"'
+    if stage:
+        attrs += f' data-stage="{_h.escape(stage, quote=True)}"'
+    if impact:
+        attrs += f' data-impact="{_h.escape(impact, quote=True)}"'
     card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
@@ -835,6 +875,9 @@ def _title():
         return f'Edited {first}' + (f' + {extra} more' if extra else '')
     return f'Changed {n} files'
 
+is_pure_add    = bool(added_names)    and not modified_names and not removed_names
+is_pure_remove = bool(removed_names)  and not modified_names and not added_names
+
 # The shell caller reads the TITLE= line and strips it before inserting the rest as body.
 print(f'TITLE={_title()}')
 change_payload = {
@@ -849,19 +892,33 @@ change_payload = {
 print(f'CHANGE_JSON={json.dumps(change_payload, ensure_ascii=False)}')
 print(f'        <div class="meta">{summary}</div>')
 
-# Collapsed list of per-file diffs.
-print('        <details>')
-print('          <summary>Show per-file diffs</summary>')
-for status, rel, added, removed, diff_html in changes:
-    badge = {"added":"<span class=\"pill info\">added</span>", "removed":"<span class=\"pill fail\">removed</span>", "modified":"<span class=\"pill info\">modified</span>"}[status]
-    header = f'{badge} <code>{html.escape(rel)}</code>'
-    if added or removed:
-        header += f' <span class="plus">+{added}</span> / <span class="minus">-{removed}</span>'
-    print('          <details>')
-    print(f'            <summary>{header}</summary>')
-    print(f'            {diff_html}')
-    print('          </details>')
-print('        </details>')
+if is_pure_add or is_pure_remove:
+    # Compact card: pill badges only, no diff <details> block
+    color_cls = "ok" if is_pure_add else "fail"
+    verb      = "Created" if is_pure_add else "Deleted"
+    names     = added_names if is_pure_add else removed_names
+    pills = " ".join(
+        f'<span class="pill {color_cls}"><code>{html.escape(n)}</code></span>'
+        for n in names[:8]
+    )
+    extra = len(names) - 8
+    if extra > 0:
+        pills += f' <span class="muted">+{extra} more</span>'
+    print(f'        <div class="meta" style="margin-top:6px;">{verb}: {pills}</div>')
+else:
+    # Full diff block
+    print('        <details>')
+    print('          <summary>Show per-file diffs</summary>')
+    for status, rel, added, removed, diff_html in changes:
+        badge = {"added":"<span class=\"pill info\">added</span>", "removed":"<span class=\"pill fail\">removed</span>", "modified":"<span class=\"pill info\">modified</span>"}[status]
+        header = f'{badge} <code>{html.escape(rel)}</code>'
+        if added or removed:
+            header += f' <span class="plus">+{added}</span> / <span class="minus">-{removed}</span>'
+        print('          <details>')
+        print(f'            <summary>{header}</summary>')
+        print(f'            {diff_html}')
+        print('          </details>')
+    print('        </details>')
 PY
   cat "$body_file"
   rm -f "$body_file"
@@ -955,19 +1012,73 @@ PY
   rm -f "$out_file"
 }
 
-# Re-render the "Approach summary" panel from the current notebook contents and
-# splice it into dashboard.html. Always replaces the existing <section id="approach">â€¦</section>
-# block so the panel stays in sync with solution.ipynb without accumulating history.
-refresh_approach_summary() {
+APPROACH_SNAP_TMP=""
+
+# Refreshes the approach panel in dashboard.html. Runs summarize_approach.py,
+# optionally injects LLM prose from .agent_note.json above the static columns,
+# fixes the approach snapshot markers (existing bug fix), and splices the updated
+# section into dashboard.html. Sets APPROACH_SNAP_TMP to a temp file path with
+# the snap content (wrapped in BEGIN/END_APPROACH_DISPLAY markers) for the caller
+# to pass to append_card(); caller must rm -f it.
+refresh_approach_panel() {
+  local llm_prose="${1:-}"
+  APPROACH_SNAP_TMP=""
   [[ -f "$APPROACH_HELPER" ]] || return 0
   [[ -f "$DASHBOARD_PATH" ]] || return 0
-  local tmp_html
-  tmp_html="$(mktemp)"
-  if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$tmp_html" 2>/dev/null; then
-    rm -f "$tmp_html"
+  local tmp_section snap_tmp
+  tmp_section="$(mktemp)"
+  snap_tmp="$(mktemp)"
+  if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$tmp_section" 2>/dev/null; then
+    rm -f "$tmp_section" "$snap_tmp"
     return 0
   fi
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$tmp_html" <<'PY'
+  # Post-process: extract approachDisplay content, wrap in markers for chart dot
+  # snapshots (fixes bug where snap was always empty), inject LLM prose if present.
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$tmp_section" "$snap_tmp" "$llm_prose" <<'PY'
+import pathlib, re, sys, html as _h
+
+tmp_section_path = pathlib.Path(sys.argv[1])
+snap_path        = pathlib.Path(sys.argv[2])
+llm_prose        = sys.argv[3] if len(sys.argv) > 3 else ""
+
+content = tmp_section_path.read_text(encoding="utf-8")
+
+# Extract the inner HTML of approachDisplay
+m = re.search(r'(<div id="approachDisplay">)(.*?)(</div>\s*</section>)', content, re.DOTALL)
+if m:
+    pre, display_inner, post = m.group(1), m.group(2).strip(), m.group(3)
+else:
+    pre, display_inner, post = "", content, ""
+
+# Build snap content for chart dot clicks
+snap_inner = display_inner
+if llm_prose:
+    esc = _h.escape(llm_prose)
+    llm_block = f'<div class="llm-approach-block"><p class="llm-approach-prose">{esc}</p></div>'
+    snap_inner = llm_block + "\n" + display_inner
+
+snap_content = "<!--BEGIN_APPROACH_DISPLAY-->\n" + snap_inner + "\n<!--END_APPROACH_DISPLAY-->"
+snap_path.write_text(snap_content, encoding="utf-8")
+
+# Inject LLM prose into the section HTML; clear old block if absent
+if m:
+    if llm_prose:
+        esc = _h.escape(llm_prose)
+        llm_block = (
+            '<!--BEGIN_LLM_APPROACH-->'
+            f'<div class="llm-approach-block"><p class="llm-approach-prose">{esc}</p></div>'
+            '<!--END_LLM_APPROACH-->'
+        )
+        new_display = pre + "\n" + llm_block + "\n" + display_inner + "\n" + post
+    else:
+        # Clear any LLM block that may have been written by a previous run
+        new_display = pre + "\n" + display_inner + "\n" + post
+    content = content[: m.start()] + new_display + content[m.end():]
+
+tmp_section_path.write_text(content, encoding="utf-8")
+PY
+  # Splice the updated approach section into dashboard.html
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$tmp_section" <<'PY'
 import pathlib, re, sys
 dash_path = pathlib.Path(sys.argv[1])
 frag_path = pathlib.Path(sys.argv[2])
@@ -977,12 +1088,12 @@ pattern = re.compile(r'<section id="approach".*?</section>', re.DOTALL)
 if pattern.search(dash):
     new = pattern.sub(lambda _m: frag, dash, count=1)
 else:
-    # Older dashboards (before this feature) had no placeholder. Inject after <main>.
     new = dash.replace("<main>", "<main>\n    " + frag, 1)
 if new != dash:
     dash_path.write_text(new, encoding="utf-8", newline="\n")
 PY
-  rm -f "$tmp_html"
+  rm -f "$tmp_section"
+  APPROACH_SNAP_TMP="$snap_tmp"
 }
 
 # Produces a one-line summary of what changed in solution.ipynb since the last
@@ -1083,58 +1194,47 @@ PY
 }
 
 run_notebook_and_log_metric() {
-  if [[ ! -f "$NOTEBOOK_PATH" ]]; then
-    append_card "Notebook Metric" "No <code>solution.ipynb</code> found yet" '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
-    refresh_approach_summary
+  read_agent_note
+  if [[ ! -f “$NOTEBOOK_PATH” ]]; then
+    append_card “Notebook Metric” “No <code>solution.ipynb</code> found yet” '        <div class=”empty”>Create solution.ipynb to enable automatic metric extraction.</div>'
+    refresh_approach_panel
+    [[ -n “${APPROACH_SNAP_TMP:-}” ]] && rm -f “$APPROACH_SNAP_TMP”
     return
   fi
-  # Capture the change summary *before* the metric run so the note describes
-  # what produced this metric (current notebook vs previous recorded run).
   local change_note
-  change_note="$(compute_notebook_change_note || true)"
+  change_note=”$(compute_notebook_change_note || true)”
   local output status max_acc
   set +e
-  output="$("$PY_BIN" "$HELPER" "$NOTEBOOK_PATH" 2>&1)"
+  output=”$(“$PY_BIN” “$HELPER” “$NOTEBOOK_PATH” 2>&1)”
   status=$?
   set -e
-  max_acc="$(printf "%s\n" "$output" | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)"
-  [[ -z "${max_acc:-}" ]] && max_acc="NA"
-  # Snapshot approach summary for this metric dot (same notebook state as the run).
-  local snap_tmp=""
-  snap_tmp="$(mktemp)"
-  if [[ -f "$APPROACH_HELPER" ]] && [[ -f "$NOTEBOOK_PATH" ]]; then
-    if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$snap_tmp" 2>/dev/null; then
-      rm -f "$snap_tmp"
-      snap_tmp=""
-    fi
-  else
-    rm -f "$snap_tmp"
-    snap_tmp=""
-  fi
-  # Tail the output to keep the card compact.
+  max_acc=”$(printf “%s\n” “$output” | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)”
+  [[ -z “${max_acc:-}” ]] && max_acc=”NA”
   local tail_output
-  tail_output="$(printf "%s\n" "$output" | tail -n "$MAX_OUTPUT_LINES")"
+  tail_output=”$(printf “%s\n” “$output” | tail -n “$MAX_OUTPUT_LINES”)”
   local body
-  body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
-    "$MAX_OUTPUT_LINES" \
-    "$(printf "%s" "$tail_output" | html_escape)")"
+  body=”$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
+    “$MAX_OUTPUT_LINES” \
+    “$(printf “%s” “$tail_output” | html_escape)”)”
+  # Refresh approach panel (creates snap with markers, splices into dashboard.html)
+  refresh_approach_panel “${AGENT_APPROACH:-}”
+  local snap_tmp=”${APPROACH_SNAP_TMP:-}”
   local meta
-  if [[ "$status" -ne 0 ]]; then
-    meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
-    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp"
-  elif [[ "$max_acc" == "NA" ]]; then
-    meta="<code>MAX_VALIDATION_ACCURACY=NA</code> â€“ add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
-    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp"
+  if [[ “$status” -ne 0 ]]; then
+    meta='<span class=”pill fail”>exit '”$status”'</span> <code>MAX_VALIDATION_ACCURACY='”$max_acc”'</code>'
+    append_card “Notebook Metric” “$meta” “$body” “” “$change_note” “$snap_tmp” “” \
+      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
+  elif [[ “$max_acc” == “NA” ]]; then
+    meta=”<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook”
+    append_card “Notebook Metric” “$meta” “$body” “” “$change_note” “$snap_tmp” “” \
+      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
   else
-    meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
-    append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp"
+    meta=”<code>MAX_VALIDATION_ACCURACY=$max_acc</code>”
+    append_card “Notebook Metric” “$meta” “$body” “$max_acc” “$change_note” “$snap_tmp” “” \
+      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
   fi
-  [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
-  # Persist the current notebook as the baseline for the next metric run so the
-  # next compute_notebook_change_note diffs against this run. Copy silently; if
-  # cp fails we simply lose the note next time, which is acceptable.
-  cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true
-  refresh_approach_summary
+  [[ -n “$snap_tmp” ]] && rm -f “$snap_tmp”
+  cp -f “$NOTEBOOK_PATH” “$ROOT_DIR/.supervisor_prev_notebook.ipynb” 2>/dev/null || true
 }
 
 run_wrapped_command() {
@@ -1196,7 +1296,7 @@ watch_loop() {
   snapshot_workspace
   # Populate the Approach summary panel immediately so users see it even
   # before the first notebook run completes.
-  refresh_approach_summary
+  refresh_approach_panel
   if [[ "$first_run" -eq 1 ]]; then
     append_card "Supervisor Ready" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s â€“ edits you make will appear below" '        <div class="empty">No changes yet. Start codingâ€”each save will append a card.</div>'
     # Auto-open the dashboard only for manual terminal runs; when the aicodinggym

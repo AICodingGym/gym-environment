@@ -148,6 +148,38 @@ cat review.md | aicodinggym cr submit <problem_id> # Submit review via stdin
 
 ---
 
+## Change Logging (required for MLE-bench)
+
+After every significant change to your solution — model change, preprocessing update, hyperparameter tuning, new file — write a `.agent_note.json` file in the competition folder **before** saving the notebook or file that triggered the change:
+
+```json
+{
+  "change_summary": "One sentence: what changed concretely.",
+  "why": "One sentence: reasoning — hypothesis or what problem this solves.",
+  "approach_description": "2–5 sentences describing the full current approach (preprocessing, model, eval, key decisions). Required on the first run and whenever the overall approach changes meaningfully.",
+  "stage_label": "Stage 1: Baseline",
+  "impact": "high"
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `change_summary` | yes | One sentence — what concretely changed |
+| `why` | yes | One sentence — reasoning or hypothesis |
+| `approach_description` | first run + on approach change | Full pipeline description for the approach panel |
+| `stage_label` | first run (use `"Stage 1: Baseline"`) | Update when strategy shifts (e.g. `"Stage 2: Semantic Features"`) |
+| `impact` | no | `"low"` / `"medium"` / `"high"` — drives visual accents on the dashboard |
+
+**Rules:**
+- Write the file, then save the notebook/file (the supervisor reads it on the next watch cycle and deletes it)
+- `change_summary` and `why` are always required for significant changes
+- Omit the file entirely for trivial actions (typo fix, rename)
+- Example first run: set `stage_label` to `"Stage 1: Baseline"` and `approach_description` to your initial pipeline description
+
+The supervisor reads `.agent_note.json` once per cycle, attaches the fields to the metric card, and shows them as a visible prose block on the dashboard.
+
+---
+
 ## Session Log (REQUIRED)
 
 You MUST create a session log file on your very first interaction and update it
