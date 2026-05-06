@@ -1196,7 +1196,7 @@ PY
 run_notebook_and_log_metric() {
   read_agent_note
   if [[ ! -f “$NOTEBOOK_PATH” ]]; then
-    append_card “Notebook Metric” “No <code>solution.ipynb</code> found yet” '        <div class=”empty”>Create solution.ipynb to enable automatic metric extraction.</div>'
+    append_card “Notebook Metric” 'No <code>solution.ipynb</code> found yet' '        <div class=”empty”>Create solution.ipynb to enable automatic metric extraction.</div>'
     refresh_approach_panel
     [[ -n “${APPROACH_SNAP_TMP:-}” ]] && rm -f “$APPROACH_SNAP_TMP”
     return
