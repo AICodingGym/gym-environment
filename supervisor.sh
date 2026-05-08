@@ -37,6 +37,8 @@ read_agent_note() {
   AGENT_APPROACH=""
   AGENT_STAGE=""
   AGENT_IMPACT=""
+  AGENT_PROMPT=""
+  AGENT_NEXT_PROMPT=""
   [[ -f "$AGENT_NOTE_PATH" ]] || return 0
   local parsed
   parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
@@ -51,6 +53,8 @@ mapping = [
     ("approach_description", "AGENT_APPROACH"),
     ("stage_label",    "AGENT_STAGE"),
     ("impact",         "AGENT_IMPACT"),
+    ("user_prompt",    "AGENT_PROMPT"),
+    ("next_prompt",    "AGENT_NEXT_PROMPT"),
 ]
 for key, var in mapping:
     val = str(data.get(key, "")).replace("\n", " ").replace("'", "'\\''")
@@ -552,7 +556,7 @@ append_card() {
   # Args: title, meta_html, body_html, metric_value (optional), note (optional),
   # approach_snap_path (optional), change_json (optional), ai_summary (optional),
   # ai_source (optional), ai_status (optional), why (optional), stage (optional),
-  # impact (optional: low|medium|high)
+  # impact (optional: low|medium|high), prompt (optional), next_prompt (optional)
   local title="$1"
   local meta="$2"
   local body_html="$3"
@@ -566,12 +570,14 @@ append_card() {
   local why="${11:-}"
   local stage="${12:-}"
   local impact="${13:-}"
+  local prompt="${14:-}"
+  local next_prompt="${15:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" <<'PY' "$body_html" >"$temp_file"
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" "$prompt" "$next_prompt" <<'PY' "$body_html" >"$temp_file"
 import re, sys, pathlib, datetime, html as _h
 
-dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, body = sys.argv[1:15]
+dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, prompt, next_prompt, body = sys.argv[1:17]
 
 
 def _extract_approach_snap(text: str) -> str:
@@ -618,6 +624,10 @@ if idx != -1:
         attrs += f' data-stage="{_h.escape(stage, quote=True)}"'
     if impact:
         attrs += f' data-impact="{_h.escape(impact, quote=True)}"'
+    if prompt:
+        attrs += f' data-user-prompt="{_h.escape(prompt, quote=True)}"'
+    if next_prompt:
+        attrs += f' data-next-prompt="{_h.escape(next_prompt, quote=True)}"'
     card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
@@ -1107,11 +1117,12 @@ if facets:
 if boost:
     s1_parts.append("Boosting detail: " + boost[:420])
 s1 = (" ".join(s1_parts) + " ") if s1_parts else ""
+focus = "run the notebook and compare validation/metrics" if ("notebook_pipeline" in buckets or facets) else "run the relevant checks/tests"
 fallback = (
-    f"{s1}Updated {n} file(s) including {top}. "
-    f"Mix: {counts.get('added', 0)} added, {counts.get('modified', 0)} modified, {counts.get('removed', 0)} removed. "
-    f"About +{added}/-{removed} diff lines in tracked text. "
-    "Re-run the notebook to see whether validation improves."
+    f"{s1}I updated {n} file(s), including {top}. "
+    f"The change mix is {counts.get('added', 0)} added, {counts.get('modified', 0)} modified, and {counts.get('removed', 0)} removed "
+    f"(about +{added}/-{removed} lines). "
+    f"This approach should be validated next: {focus}."
 )
 
 endpoint = os.environ.get("AICODINGGYM_LLM_ENDPOINT", "").strip()
@@ -1123,18 +1134,18 @@ if not endpoint or not api_key:
     raise SystemExit(0)
 
 prompt = (
-    "Summarize this ML competition workspace change for a dashboard. "
-    "Reply with exactly 2 short sentences in clear English. No markdown or bullet characters. "
-    "Sentence 1: what changed, naming important paths and whether work was in the notebook, CSVs, or scripts. "
-    "If impact.notebook_facets is non-empty, mention those stages (e.g. preprocessing, model training, prediction export). "
-    "If impact.boosting_hint is non-empty, include the key LightGBM / XGBoost / CatBoost parameter clues in plain words. "
-    "Sentence 2: why this likely helps or hurts validation score or submission reliability.\n\n"
+    "Summarize this coding change for a dashboard card in natural, concise English. "
+    "Reply with exactly 2 short sentences. No markdown bullets. "
+    "Sentence 1: what changed and where (files/areas), including prompt-to-change context when available. "
+    "Sentence 2: likely impact and the next practical validation step. "
+    "If impact.notebook_facets exists, mention those stages naturally. "
+    "If impact.boosting_hint exists, include key parameter clues in plain words.\n\n"
     + json.dumps(change, ensure_ascii=False)
 )
 payload = {
     "model": model,
     "messages": [
-        {"role": "system", "content": "You summarize MLE bench code changes clearly."},
+        {"role": "system", "content": "You write clear, human-sounding engineering update summaries."},
         {"role": "user", "content": prompt},
     ],
     "temperature": 0.2,
@@ -1379,15 +1390,18 @@ run_notebook_and_log_metric() {
   if [[ "$status" -ne 0 ]]; then
     meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
-      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
   elif [[ "$max_acc" == "NA" ]]; then
     meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
-      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
   else
     meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp" "" \
-      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
   fi
   [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
   cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true

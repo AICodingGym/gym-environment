@@ -113,6 +113,13 @@
     .agent-note-block { margin: 8px 0; padding: 10px 13px; background: var(--accent-soft); border: 1px solid #FED7AA; border-radius: 9px; font-size: 13px; line-height: 1.55; }
     .agent-note-block .note-summary { display: block; color: var(--text); font-weight: 600; }
     .agent-note-block .note-why { display: block; margin-top: 3px; color: var(--text-soft); }
+    .structured-card { margin: 8px 0 2px; border: 1px solid var(--border); background: var(--surface-muted); border-radius: 10px; }
+    .structured-card details { margin: 0; border-bottom: 1px solid var(--border); padding: 0 10px; }
+    .structured-card details:last-child { border-bottom: 0; }
+    .structured-card summary { color: var(--text-soft); font-size: 12px; font-weight: 600; padding: 8px 0; }
+    .structured-card .section-body { font-size: 12.5px; color: var(--text); padding: 0 0 9px; line-height: 1.55; white-space: pre-wrap; }
+    .structured-card .mini-list { margin: 0; padding-left: 17px; color: var(--text-soft); }
+    .structured-card .mini-list li { margin: 2px 0; font-size: 12.5px; }
 
     /* Impact / created / deleted card accents -------------------------- */
     .card[data-impact="high"] { border-left: 3px solid var(--accent); }
@@ -314,11 +321,17 @@
 
       function renderCardEnhancements() {
         document.querySelectorAll("#cards .card").forEach(function (card) {
+          const summary = (card.getAttribute("data-ai-summary") || "").trim();
+          const why = (card.getAttribute("data-why") || "").trim();
+          const promptTxt = (card.getAttribute("data-user-prompt") || "").trim();
+          const nextPromptTxt = (card.getAttribute("data-next-prompt") || "").trim();
+          let change = null;
+
           // Apply created / deleted border classes
           const changeRaw = card.getAttribute("data-change") || "";
           if (changeRaw) {
             try {
-              const change = JSON.parse(changeRaw);
+              change = JSON.parse(changeRaw);
               const counts = change.counts || {};
               if (counts.added > 0 && !counts.modified && !counts.removed) {
                 card.classList.add("card--created");
@@ -328,31 +341,75 @@
             } catch (_) {}
           }
 
-          // Insert agent note prose block
-          const summary = (card.getAttribute("data-ai-summary") || "").trim();
-          const why = (card.getAttribute("data-why") || "").trim();
-          if (!summary && !why) return;
-          if (card.querySelector(".agent-note-block")) return;
-          const block = document.createElement("div");
-          block.className = "agent-note-block";
-          if (summary) {
-            const s = document.createElement("span");
-            s.className = "note-summary";
-            s.textContent = (why ? "Note: " : "") + summary;
-            block.appendChild(s);
+          // Insert natural-language summary block
+          if ((summary || why) && !card.querySelector(".agent-note-block")) {
+            const block = document.createElement("div");
+            block.className = "agent-note-block";
+            if (summary) {
+              const s = document.createElement("span");
+              s.className = "note-summary";
+              s.textContent = (why ? "Note: " : "") + summary;
+              block.appendChild(s);
+            }
+            if (why) {
+              const w = document.createElement("span");
+              w.className = "note-why";
+              w.textContent = why;
+              block.appendChild(w);
+            }
+            const row = card.querySelector(".row");
+            if (row && row.nextSibling) {
+              card.insertBefore(block, row.nextSibling);
+            } else {
+              card.appendChild(block);
+            }
           }
-          if (why) {
-            const w = document.createElement("span");
-            w.className = "note-why";
-            w.textContent = why;
-            block.appendChild(w);
+
+          // Insert structured dropdowns: prompt / file changes / next prompt.
+          if (card.querySelector(".structured-card")) return;
+          if (!promptTxt && !nextPromptTxt && !change) return;
+          const wrap = document.createElement("div");
+          wrap.className = "structured-card";
+          const parts = [];
+
+          if (promptTxt) {
+            parts.push(
+              '<details><summary>Prompt</summary><div class="section-body">' +
+                escapeHtml(promptTxt) +
+                "</div></details>"
+            );
           }
-          const row = card.querySelector(".row");
-          if (row && row.nextSibling) {
-            card.insertBefore(block, row.nextSibling);
-          } else {
-            card.appendChild(block);
+          if (change) {
+            const files = Array.isArray(change.files) ? change.files : [];
+            let fileHtml = '<div class="section-body"><ul class="mini-list">';
+            if (!files.length) {
+              fileHtml += "<li>No file-change payload.</li>";
+            } else {
+              files.slice(0, 12).forEach(function (f) {
+                const status = escapeHtml(String(f.status || "changed"));
+                const path = escapeHtml(String(f.path || "?"));
+                const plus = Number(f.added_lines || 0);
+                const minus = Number(f.removed_lines || 0);
+                fileHtml += "<li><b>" + status + "</b> " + path + " (+" + plus + "/-" + minus + ")</li>";
+              });
+              if (files.length > 12) {
+                fileHtml += "<li>+" + (files.length - 12) + " more files</li>";
+              }
+            }
+            fileHtml += "</ul></div>";
+            parts.push('<details><summary>File Changes</summary>' + fileHtml + "</details>");
           }
+          if (nextPromptTxt) {
+            parts.push(
+              '<details><summary>Next Prompt</summary><div class="section-body">' +
+                escapeHtml(nextPromptTxt) +
+                "</div></details>"
+            );
+          }
+          wrap.innerHTML = parts.join("");
+          const anchor = card.querySelector(".agent-note-block") || card.querySelector(".row");
+          if (anchor && anchor.nextSibling) card.insertBefore(wrap, anchor.nextSibling);
+          else card.appendChild(wrap);
         });
       }
 

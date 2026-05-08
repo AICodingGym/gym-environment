@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import subprocess
 import sys
@@ -11,9 +12,21 @@ FLOAT_RE = r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?"
 def execute_notebook(notebook_path: Path) -> str:
     """Run nbconvert --execute; try ``jupyter`` then ``python -m jupyter`` (Windows)."""
     nb = str(notebook_path)
+    startup_timeout = int(os.environ.get("AICODINGGYM_NB_STARTUP_TIMEOUT_SEC", "240"))
+    exec_timeout = int(os.environ.get("AICODINGGYM_NB_EXEC_TIMEOUT_SEC", "0"))
+    common = [
+        "nbconvert",
+        "--to",
+        "notebook",
+        "--execute",
+        nb,
+        "--inplace",
+        f"--ExecutePreprocessor.startup_timeout={startup_timeout}",
+        f"--ExecutePreprocessor.timeout={exec_timeout}",
+    ]
     variants = (
-        ["jupyter", "nbconvert", "--to", "notebook", "--execute", nb, "--inplace"],
-        [sys.executable, "-m", "jupyter", "nbconvert", "--to", "notebook", "--execute", nb, "--inplace"],
+        ["jupyter", *common],
+        [sys.executable, "-m", "jupyter", *common],
     )
     last_combined = ""
     for cmd in variants:
