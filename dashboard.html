@@ -113,13 +113,16 @@
     .agent-note-block { margin: 8px 0; padding: 10px 13px; background: var(--accent-soft); border: 1px solid #FED7AA; border-radius: 9px; font-size: 13px; line-height: 1.55; }
     .agent-note-block .note-summary { display: block; color: var(--text); font-weight: 600; }
     .agent-note-block .note-why { display: block; margin-top: 3px; color: var(--text-soft); }
-    .structured-card { margin: 8px 0 2px; border: 1px solid var(--border); background: var(--surface-muted); border-radius: 10px; }
-    .structured-card details { margin: 0; border-bottom: 1px solid var(--border); padding: 0 10px; }
-    .structured-card details:last-child { border-bottom: 0; }
-    .structured-card summary { color: var(--text-soft); font-size: 12px; font-weight: 600; padding: 8px 0; }
-    .structured-card .section-body { font-size: 12.5px; color: var(--text); padding: 0 0 9px; line-height: 1.55; white-space: pre-wrap; }
-    .structured-card .mini-list { margin: 0; padding-left: 17px; color: var(--text-soft); }
-    .structured-card .mini-list li { margin: 2px 0; font-size: 12.5px; }
+    .prompt-timeline { margin: 0 0 12px; display: grid; gap: 10px; }
+    .prompt-group { border: 1px solid var(--border); background: var(--surface-muted); border-radius: 10px; overflow: hidden; }
+    .prompt-group > summary { cursor: pointer; list-style: none; padding: 10px 12px; font-size: 13px; color: var(--text); font-weight: 650; background: #F8FAFC; }
+    .prompt-group > summary::-webkit-details-marker { display: none; }
+    .prompt-group > summary .prompt-label { color: #9A3412; margin-right: 8px; }
+    .prompt-group > summary .prompt-text { color: var(--text-soft); font-weight: 500; }
+    .prompt-body { border-top: 1px solid var(--border); padding: 10px 12px; }
+    .prompt-block-title { margin: 0 0 6px; font-size: 12px; color: var(--text-soft); font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+    .prompt-body .mini-list { margin: 0; padding-left: 18px; color: var(--text-soft); }
+    .prompt-body .mini-list li { margin: 3px 0; font-size: 12.5px; line-height: 1.5; }
 
     /* Impact / created / deleted card accents -------------------------- */
     .card[data-impact="high"] { border-left: 3px solid var(--accent); }
@@ -320,97 +323,125 @@
       }
 
       function renderCardEnhancements() {
-        document.querySelectorAll("#cards .card").forEach(function (card) {
+        const cardsRoot = document.getElementById("cards");
+        if (!cardsRoot) return;
+        const cardNodes = Array.from(cardsRoot.querySelectorAll(".card"));
+        if (!cardNodes.length) return;
+
+        const groups = [];
+        let activeGroup = null;
+        let autoPromptCount = 0;
+
+        cardNodes.forEach(function (card, idx) {
           const summary = (card.getAttribute("data-ai-summary") || "").trim();
           const why = (card.getAttribute("data-why") || "").trim();
           const promptTxt = (card.getAttribute("data-user-prompt") || "").trim();
           const nextPromptTxt = (card.getAttribute("data-next-prompt") || "").trim();
-          let change = null;
+          const promptKeyRaw = (card.getAttribute("data-prompt-key") || "").trim();
+          const promptSeqRaw = (card.getAttribute("data-prompt-seq") || "").trim();
 
-          // Apply created / deleted border classes
+          let change = null;
           const changeRaw = card.getAttribute("data-change") || "";
           if (changeRaw) {
             try {
               change = JSON.parse(changeRaw);
-              const counts = change.counts || {};
-              if (counts.added > 0 && !counts.modified && !counts.removed) {
-                card.classList.add("card--created");
-              } else if (counts.removed > 0 && !counts.modified && !counts.added) {
-                card.classList.add("card--deleted");
-              }
             } catch (_) {}
           }
 
-          // Insert natural-language summary block
-          if ((summary || why) && !card.querySelector(".agent-note-block")) {
-            const block = document.createElement("div");
-            block.className = "agent-note-block";
-            if (summary) {
-              const s = document.createElement("span");
-              s.className = "note-summary";
-              s.textContent = (why ? "Note: " : "") + summary;
-              block.appendChild(s);
-            }
-            if (why) {
-              const w = document.createElement("span");
-              w.className = "note-why";
-              w.textContent = why;
-              block.appendChild(w);
-            }
-            const row = card.querySelector(".row");
-            if (row && row.nextSibling) {
-              card.insertBefore(block, row.nextSibling);
-            } else {
-              card.appendChild(block);
-            }
+          const startsPrompt = Boolean(promptTxt || promptKeyRaw);
+          if (startsPrompt) {
+            const key = promptKeyRaw || ("prompt-text:" + promptTxt.toLowerCase());
+            activeGroup = {
+              key: key,
+              prompt: promptTxt || "Prompt context unavailable.",
+              nextPrompt: nextPromptTxt,
+              seq: promptSeqRaw,
+              cards: [],
+              files: [],
+              notes: []
+            };
+            groups.push(activeGroup);
+          } else if (!activeGroup) {
+            autoPromptCount += 1;
+            activeGroup = {
+              key: "auto-" + autoPromptCount + "-" + idx,
+              prompt: "No prompt metadata captured for this period.",
+              nextPrompt: "",
+              seq: "",
+              cards: [],
+              files: [],
+              notes: []
+            };
+            groups.push(activeGroup);
           }
 
-          // Insert structured dropdowns: prompt / file changes / next prompt.
-          if (card.querySelector(".structured-card")) return;
-          if (!promptTxt && !nextPromptTxt && !change) return;
-          const wrap = document.createElement("div");
-          wrap.className = "structured-card";
-          const parts = [];
-
-          if (promptTxt) {
-            parts.push(
-              '<details><summary>Prompt</summary><div class="section-body">' +
-                escapeHtml(promptTxt) +
-                "</div></details>"
-            );
+          activeGroup.cards.push(card);
+          if (change && Array.isArray(change.files) && change.files.length) {
+            activeGroup.files = activeGroup.files.concat(change.files);
           }
-          if (change) {
-            const files = Array.isArray(change.files) ? change.files : [];
-            let fileHtml = '<div class="section-body"><ul class="mini-list">';
-            if (!files.length) {
-              fileHtml += "<li>No file-change payload.</li>";
-            } else {
-              files.slice(0, 12).forEach(function (f) {
+          if (summary || why) {
+            activeGroup.notes.push((summary + (why ? " " + why : "")).trim());
+          }
+          if (!activeGroup.nextPrompt && nextPromptTxt) {
+            activeGroup.nextPrompt = nextPromptTxt;
+          }
+        });
+
+        // Legacy cards remain in DOM for metric logic, but hidden from the timeline view.
+        cardNodes.forEach(function (card) {
+          card.style.display = "none";
+        });
+
+        const prior = document.getElementById("promptTimeline");
+        if (prior) prior.remove();
+        const timeline = document.createElement("div");
+        timeline.id = "promptTimeline";
+        timeline.className = "prompt-timeline";
+
+        groups.forEach(function (group, i) {
+          const promptLabel = "Prompt " + (i + 1);
+          const summaryLine = group.notes.length ? group.notes[0] : "";
+          const files = group.files;
+          let filesHtml = "";
+          if (!files.length) {
+            filesHtml = "<li>No tracked file changes were attached to this prompt.</li>";
+          } else {
+            const capped = files.slice(0, 30);
+            filesHtml = capped
+              .map(function (f) {
                 const status = escapeHtml(String(f.status || "changed"));
                 const path = escapeHtml(String(f.path || "?"));
                 const plus = Number(f.added_lines || 0);
                 const minus = Number(f.removed_lines || 0);
-                fileHtml += "<li><b>" + status + "</b> " + path + " (+" + plus + "/-" + minus + ")</li>";
-              });
-              if (files.length > 12) {
-                fileHtml += "<li>+" + (files.length - 12) + " more files</li>";
-              }
+                return "<li><b>" + status + "</b> " + path + " (+" + plus + "/-" + minus + ")</li>";
+              })
+              .join("");
+            if (files.length > capped.length) {
+              filesHtml += "<li>+" + (files.length - capped.length) + " more files</li>";
             }
-            fileHtml += "</ul></div>";
-            parts.push('<details><summary>File Changes</summary>' + fileHtml + "</details>");
           }
-          if (nextPromptTxt) {
-            parts.push(
-              '<details><summary>Next Prompt</summary><div class="section-body">' +
-                escapeHtml(nextPromptTxt) +
-                "</div></details>"
-            );
+
+          const bodyBits = [
+            '<p class="prompt-block-title">All Changes</p><ul class="mini-list">' + filesHtml + "</ul>"
+          ];
+          if (summaryLine) {
+            bodyBits.unshift('<p style="margin:0 0 8px;color:var(--text);font-size:13px;">' + escapeHtml(summaryLine) + "</p>");
           }
-          wrap.innerHTML = parts.join("");
-          const anchor = card.querySelector(".agent-note-block") || card.querySelector(".row");
-          if (anchor && anchor.nextSibling) card.insertBefore(wrap, anchor.nextSibling);
-          else card.appendChild(wrap);
+          if (group.nextPrompt) {
+            bodyBits.push('<p style="margin:9px 0 0;color:var(--text-soft);font-size:12.5px;"><b>Next prompt:</b> ' + escapeHtml(group.nextPrompt) + "</p>");
+          }
+
+          const item = document.createElement("details");
+          item.className = "prompt-group";
+          if (i === 0) item.open = true;
+          item.innerHTML =
+            '<summary><span class="prompt-label">' + promptLabel + "</span>" +
+            '<span class="prompt-text">' + escapeHtml(group.prompt) + "</span></summary>" +
+            '<div class="prompt-body">' + bodyBits.join("") + "</div>";
+          timeline.appendChild(item);
         });
+
+        cardsRoot.parentNode.insertBefore(timeline, cardsRoot);
       }
 
       const cards = Array.from(document.querySelectorAll("#cards .card"));

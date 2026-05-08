@@ -39,6 +39,8 @@ read_agent_note() {
   AGENT_IMPACT=""
   AGENT_PROMPT=""
   AGENT_NEXT_PROMPT=""
+  AGENT_PROMPT_ID=""
+  AGENT_PROMPT_TS=""
   [[ -f "$AGENT_NOTE_PATH" ]] || return 0
   local parsed
   parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
@@ -55,6 +57,8 @@ mapping = [
     ("impact",         "AGENT_IMPACT"),
     ("user_prompt",    "AGENT_PROMPT"),
     ("next_prompt",    "AGENT_NEXT_PROMPT"),
+    ("prompt_id",      "AGENT_PROMPT_ID"),
+    ("prompt_ts",      "AGENT_PROMPT_TS"),
 ]
 for key, var in mapping:
     val = str(data.get(key, "")).replace("\n", " ").replace("'", "'\\''")
@@ -556,7 +560,8 @@ append_card() {
   # Args: title, meta_html, body_html, metric_value (optional), note (optional),
   # approach_snap_path (optional), change_json (optional), ai_summary (optional),
   # ai_source (optional), ai_status (optional), why (optional), stage (optional),
-  # impact (optional: low|medium|high), prompt (optional), next_prompt (optional)
+  # impact (optional: low|medium|high), prompt (optional), next_prompt (optional),
+  # prompt_key (optional), prompt_seq (optional)
   local title="$1"
   local meta="$2"
   local body_html="$3"
@@ -572,12 +577,14 @@ append_card() {
   local impact="${13:-}"
   local prompt="${14:-}"
   local next_prompt="${15:-}"
+  local prompt_key="${16:-}"
+  local prompt_seq="${17:-}"
   local temp_file
   temp_file="$(mktemp)"
-  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" "$prompt" "$next_prompt" <<'PY' "$body_html" >"$temp_file"
+  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" "$prompt" "$next_prompt" "$prompt_key" "$prompt_seq" <<'PY' "$body_html" >"$temp_file"
 import re, sys, pathlib, datetime, html as _h
 
-dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, prompt, next_prompt, body = sys.argv[1:17]
+dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, prompt, next_prompt, prompt_key, prompt_seq, body = sys.argv[1:19]
 
 
 def _extract_approach_snap(text: str) -> str:
@@ -628,6 +635,10 @@ if idx != -1:
         attrs += f' data-user-prompt="{_h.escape(prompt, quote=True)}"'
     if next_prompt:
         attrs += f' data-next-prompt="{_h.escape(next_prompt, quote=True)}"'
+    if prompt_key:
+        attrs += f' data-prompt-key="{_h.escape(prompt_key, quote=True)}"'
+    if prompt_seq:
+        attrs += f' data-prompt-seq="{_h.escape(prompt_seq, quote=True)}"'
     card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
@@ -1109,20 +1120,18 @@ top = ", ".join(f.get("path", "?") for f in files[:3]) if files else "no files"
 facets = imp.get("notebook_facets") or []
 buckets = imp.get("buckets") or []
 boost = (imp.get("boosting_hint") or "").strip()
-s1_parts = []
+parts = []
 if buckets:
-    s1_parts.append("Areas: " + ", ".join(str(b).replace("_", " ") for b in buckets))
+    parts.append("areas touched: " + ", ".join(str(b).replace("_", " ") for b in buckets))
 if facets:
-    s1_parts.append("Notebook work: " + ", ".join(facets))
+    parts.append("pipeline stages: " + ", ".join(facets))
 if boost:
-    s1_parts.append("Boosting detail: " + boost[:420])
-s1 = (" ".join(s1_parts) + " ") if s1_parts else ""
-focus = "run the notebook and compare validation/metrics" if ("notebook_pipeline" in buckets or facets) else "run the relevant checks/tests"
+    parts.append("model detail: " + boost[:220])
+context = (" (" + "; ".join(parts) + ")") if parts else ""
+focus = "run the notebook and compare validation metrics" if ("notebook_pipeline" in buckets or facets) else "run the relevant checks or tests for this task type"
 fallback = (
-    f"{s1}I updated {n} file(s), including {top}. "
-    f"The change mix is {counts.get('added', 0)} added, {counts.get('modified', 0)} modified, and {counts.get('removed', 0)} removed "
-    f"(about +{added}/-{removed} lines). "
-    f"This approach should be validated next: {focus}."
+    f"Updated {n} file(s), mainly {top}{context}, with about +{added}/-{removed} lines of churn. "
+    f"This should improve the current approach, and the next step is to {focus}."
 )
 
 endpoint = os.environ.get("AICODINGGYM_LLM_ENDPOINT", "").strip()
@@ -1135,10 +1144,11 @@ if not endpoint or not api_key:
 
 prompt = (
     "Summarize this coding change for a dashboard card in natural, concise English. "
-    "Reply with exactly 2 short sentences. No markdown bullets. "
-    "Sentence 1: what changed and where (files/areas), including prompt-to-change context when available. "
-    "Sentence 2: likely impact and the next practical validation step. "
-    "If impact.notebook_facets exists, mention those stages naturally. "
+    "Reply with exactly 2 short sentences and no markdown. "
+    "Sentence 1 should explain what changed and the approach chosen, in plain words. "
+    "Sentence 2 should state expected impact and the most practical next validation step. "
+    "Make it sound natural for SWE, MLE, or code review tasks. "
+    "If impact.notebook_facets exists, weave those stages in naturally. "
     "If impact.boosting_hint exists, include key parameter clues in plain words.\n\n"
     + json.dumps(change, ensure_ascii=False)
 )
@@ -1379,6 +1389,11 @@ run_notebook_and_log_metric() {
   [[ -z "${max_acc:-}" ]] && max_acc="NA"
   local tail_output
   tail_output="$(printf '%s\n' "$output" | tail -n "$MAX_OUTPUT_LINES")"
+  local prompt_key prompt_seq
+  prompt_key="${AGENT_PROMPT_ID:-}"
+  [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT:-}"
+  [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT_TS:-}"
+  prompt_seq="${AGENT_PROMPT_TS:-}"
   local body
   body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
     "$MAX_OUTPUT_LINES" \
@@ -1391,17 +1406,17 @@ run_notebook_and_log_metric() {
     meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   elif [[ "$max_acc" == "NA" ]]; then
     meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   else
     meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   fi
   [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
   cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true
