@@ -1393,7 +1393,10 @@ run_notebook_and_log_metric() {
   prompt_key="${AGENT_PROMPT_ID:-}"
   [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT:-}"
   [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT_TS:-}"
-  prompt_seq="${AGENT_PROMPT_TS:-}"
+  # Backward-compatible fallback: no prompt metadata means each save gets
+  # its own synthetic prompt key so dashboard buckets remain separated.
+  [[ -z "$prompt_key" ]] && prompt_key="auto-prompt-$(date +%s)-$RANDOM"
+  prompt_seq="${AGENT_PROMPT_TS:-$(timestamp)}"
   local body
   body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
     "$MAX_OUTPUT_LINES" \
