@@ -353,7 +353,9 @@
             const key = promptKeyRaw || ("prompt-text:" + promptTxt.toLowerCase());
             activeGroup = {
               key: key,
-              prompt: promptTxt || "Prompt context unavailable.",
+              prompt:
+                promptTxt ||
+                (promptKeyRaw ? ("Prompt key: " + promptKeyRaw) : "Prompt context unavailable."),
               nextPrompt: nextPromptTxt,
               seq: promptSeqRaw,
               cards: [],
@@ -361,7 +363,7 @@
               notes: []
             };
             groups.push(activeGroup);
-          } else {
+          } else if (!activeGroup) {
             autoPromptCount += 1;
             activeGroup = {
               key: "auto-" + autoPromptCount + "-" + idx,

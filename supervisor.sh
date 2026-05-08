@@ -46,7 +46,7 @@ read_agent_note() {
   parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
 import json, sys, pathlib
 try:
-    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
 except Exception:
     sys.exit(0)
 mapping = [
@@ -56,12 +56,35 @@ mapping = [
     ("stage_label",    "AGENT_STAGE"),
     ("impact",         "AGENT_IMPACT"),
     ("user_prompt",    "AGENT_PROMPT"),
+    ("prompt",         "AGENT_PROMPT"),
+    ("prompt_text",    "AGENT_PROMPT"),
+    ("user_prompt_text", "AGENT_PROMPT"),
     ("next_prompt",    "AGENT_NEXT_PROMPT"),
+    ("nextPrompt",     "AGENT_NEXT_PROMPT"),
+    ("next_prompt_text","AGENT_NEXT_PROMPT"),
     ("prompt_id",      "AGENT_PROMPT_ID"),
     ("prompt_ts",      "AGENT_PROMPT_TS"),
 ]
+resolved = {}
 for key, var in mapping:
-    val = str(data.get(key, "")).replace("\n", " ").replace("'", "'\\''")
+    raw = data.get(key, "")
+    val = str(raw).strip() if raw is not None else ""
+    if not val and resolved.get(var):
+        continue
+    resolved[var] = val
+
+for var in [
+    "AGENT_SUMMARY",
+    "AGENT_WHY",
+    "AGENT_APPROACH",
+    "AGENT_STAGE",
+    "AGENT_IMPACT",
+    "AGENT_PROMPT",
+    "AGENT_NEXT_PROMPT",
+    "AGENT_PROMPT_ID",
+    "AGENT_PROMPT_TS",
+]:
+    val = resolved.get(var, "").replace("\n", " ").replace("'", "'\\''")
     print(f"{var}='{val}'")
 PY
   )" || true
@@ -1381,6 +1404,17 @@ run_notebook_and_log_metric() {
   local change_note
   change_note="$(compute_notebook_change_note || true)"
   local output status max_acc
+
+  # If an agent provided a prompt key/timestamp but not prompt text, we
+  # still want the dashboard to show *something* (instead of "context
+  # unavailable").
+  if [[ -z "${AGENT_PROMPT:-}" ]]; then
+    if [[ -n "${AGENT_PROMPT_ID:-}" ]]; then
+      AGENT_PROMPT="$AGENT_PROMPT_ID"
+    elif [[ -n "${AGENT_PROMPT_TS:-}" ]]; then
+      AGENT_PROMPT="$AGENT_PROMPT_TS"
+    fi
+  fi
   set +e
   output="$("$PY_BIN" "$HELPER" "$NOTEBOOK_PATH" 2>&1)"
   status=$?
@@ -1393,10 +1427,7 @@ run_notebook_and_log_metric() {
   prompt_key="${AGENT_PROMPT_ID:-}"
   [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT:-}"
   [[ -z "$prompt_key" ]] && prompt_key="${AGENT_PROMPT_TS:-}"
-  # Backward-compatible fallback: no prompt metadata means each save gets
-  # its own synthetic prompt key so dashboard buckets remain separated.
-  [[ -z "$prompt_key" ]] && prompt_key="auto-prompt-$(date +%s)-$RANDOM"
-  prompt_seq="${AGENT_PROMPT_TS:-$(timestamp)}"
+  prompt_seq="${AGENT_PROMPT_TS:-}"
   local body
   body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
     "$MAX_OUTPUT_LINES" \
