@@ -37,7 +37,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # -- Plain-English dictionary ------------------------------------------------
@@ -478,6 +478,90 @@ def _detect_ngram_ranges(src: str) -> Dict[str, List[str]]:
     return ranges
 
 
+_BOOST_CLS = re.compile(
+    r"\b(LGBMClassifier|LGBMRegressor|XGBClassifier|XGBRegressor|"
+    r"CatBoostClassifier|CatBoostRegressor|HistGradientBoostingClassifier|HistGradientBoostingRegressor|"
+    r"GradientBoostingClassifier|GradientBoostingRegressor)\s*\(",
+)
+
+_BOOST_PRETTY = {
+    "LGBMClassifier": "LightGBM classifier",
+    "LGBMRegressor": "LightGBM regressor",
+    "XGBClassifier": "XGBoost classifier",
+    "XGBRegressor": "XGBoost regressor",
+    "CatBoostClassifier": "CatBoost classifier",
+    "CatBoostRegressor": "CatBoost regressor",
+    "HistGradientBoostingClassifier": "HistGradientBoosting classifier",
+    "HistGradientBoostingRegressor": "HistGradientBoosting regressor",
+    "GradientBoostingClassifier": "sklearn GradientBoosting classifier",
+    "GradientBoostingRegressor": "sklearn GradientBoosting regressor",
+}
+
+
+def _balanced_paren_content(src: str, open_idx: int) -> Optional[str]:
+    """Return inner text for the '(' at *open_idx*, or None if unbalanced."""
+    depth = 0
+    for j in range(open_idx, len(src)):
+        if src[j] == "(":
+            depth += 1
+        elif src[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx + 1 : j]
+    return None
+
+
+def _detect_boosting_param_lines(src: str) -> List[str]:
+    """Extra list items for Model column: constructor kwargs for tree/boosting libraries."""
+    items: List[str] = []
+    param_patterns = (
+        (r"num_leaves\s*=\s*(\d+)", "num_leaves"),
+        (r"learning_rate\s*=\s*([\d.eE+-]+)", "learning_rate"),
+        (r"n_estimators\s*=\s*(\d+)", "n_estimators"),
+        (r"max_depth\s*=\s*([\d-]+)", "max_depth"),
+        (r"subsample\s*=\s*([\d.]+)", "subsample"),
+        (r"colsample_bytree\s*=\s*([\d.]+)", "colsample_bytree"),
+        (r"reg_alpha\s*=\s*([\d.]+)", "reg_alpha"),
+        (r"reg_lambda\s*=\s*([\d.]+)", "reg_lambda"),
+        (r"min_child_samples\s*=\s*(\d+)", "min_child_samples"),
+        (r"max_bin\s*=\s*(\d+)", "max_bin"),
+        (r"iterations\s*=\s*(\d+)", "iterations"),
+        (r"\bdepth\s*=\s*(\d+)", "depth"),
+        (r"l2_leaf_reg\s*=\s*([\d.]+)", "l2_leaf_reg"),
+        (r"objective\s*=\s*['\"]([^'\"]+)['\"]", "objective"),
+        (r"early_stopping_rounds\s*=\s*(\d+)", "early_stopping_rounds"),
+    )
+    for m in _BOOST_CLS.finditer(src):
+        open_idx = m.end() - 1
+        inner = _balanced_paren_content(src, open_idx)
+        if not inner:
+            continue
+        cls = m.group(1)
+        found: List[str] = []
+        for pat, key in param_patterns:
+            mm = re.search(pat, inner, re.I)
+            if mm:
+                found.append(f"{key}={mm.group(1)}")
+            if len(found) >= 10:
+                break
+        if not found:
+            snippet = re.sub(r"\s+", " ", inner).strip()
+            if len(snippet) > 140:
+                snippet = snippet[:137] + "..."
+            if snippet:
+                found.append(f"constructor args (snippet): {snippet}")
+        label = _BOOST_PRETTY.get(cls, cls)
+        detail = ", ".join(found[:10])
+        items.append(
+            _render_item(
+                f"{label} parameters",
+                "Hyperparameters read from the constructor call in your notebook.",
+                detail,
+            )
+        )
+    return items
+
+
 def _find_tokens(src: str, vocab) -> List[str]:
     found: List[str] = []
     for name in vocab:
@@ -659,6 +743,8 @@ def build_html(notebook_path: Path) -> str:
 
     preproc_html = merge_bucket(preproc_tok, "preproc", token_extra=extra)
     model_html = merge_bucket(model_tok, "model")
+    for boost_line in _detect_boosting_param_lines(src):
+        model_html += "\n" + boost_line
     cv_html = merge_bucket(cv_tok, "cv")
     metric_html = merge_bucket(metric_tok, "metric")
 

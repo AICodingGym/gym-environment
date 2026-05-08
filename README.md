@@ -30,6 +30,8 @@ problem folder. Its output goes to `<problem_dir>/.supervisor.log` and its PID
 lives in `<problem_dir>/.supervisor.lock`. Open `dashboard.html` to see the
 live feed.
 
+If you obtained a challenge folder without using those commands (zip, manual copy), start the watcher once from that folder with `./supervisor.sh --watch`, or run `aicodinggym init-supervisors` from the parent workspace so every subdirectory gets supervisor assets and a background watcher.
+
 You can also drive it by hand inside any challenge folder:
 
 ```bash

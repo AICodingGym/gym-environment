@@ -89,6 +89,8 @@ For MLE-bench, your implementation must live in a **Jupyter notebook** in the co
 - You must **execute the notebook** so outputs exist (cell outputs / printed paths / basic sanity checks).
 - You may also create helper `.py` modules, but the notebook is the **source of truth** and must be sufficient to reproduce the CSV.
 
+**Non-negotiable after edits:** Whenever you change `solution.ipynb` in a meaningful way, **run the full notebook** (for example: “Run All” in Jupyter, `jupyter nbconvert --execute`, or save and let `./supervisor.sh --watch` run `tools/notebook_metrics.py`). The run must print **`VAL_ACC:`** or **`validation_accuracy:`** so the supervisor can plot the metric and refresh the approach summary. Do not end a turn with only edited cells and no execution unless execution is truly impossible—then say why in the reply and session log. Optionally drop a one-line `.agent_note.json` (`change_summary`, `stage_label`, `why`) before saving so dashboard cards stay readable.
+
 ### CLI Commands
 
 ```bash

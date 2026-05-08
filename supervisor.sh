@@ -683,12 +683,89 @@ render_change_card_body() {
   local body_file
   body_file="$(mktemp)"
   PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$SNAPSHOT_DIR" "$ROOT_DIR" "$MAX_DIFF_LINES_PER_FILE" >"$body_file" <<'PY'
-import difflib, html, json, os, sys, pathlib, filecmp
+import difflib, html, json, os, re, sys, pathlib, filecmp
 
 snap, root, max_lines = sys.argv[1], sys.argv[2], int(sys.argv[3])
 SKIP_DIRS = {".git", ".supervisor_snapshot", "__pycache__"}
 SKIP_NAMES = {".supervisor.lock", ".supervisor_prev_notebook.ipynb", "dashboard.html"}
 BINARY_SUFFIXES = {".zip", ".gz", ".tar", ".pkl", ".joblib", ".npy", ".npz", ".parquet", ".pt", ".pth", ".bin", ".onnx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".csv", ".xls", ".xlsx"}
+
+def impact_bucket_for(rel):
+    r = rel.replace(os.sep, "/").lower()
+    if r.startswith("data/") or "/data/" in r:
+        return "data"
+    if r.endswith("solution.ipynb"):
+        return "notebook_pipeline"
+    base = pathlib.PurePosixPath(r).name
+    if base in ("submission.csv", "predictions.csv") or "submission" in base or base.startswith("predictions"):
+        return "submission"
+    if r.endswith(".py"):
+        return "code"
+    if r.endswith(".md") and "description" in r:
+        return "docs"
+    if pathlib.PurePosixPath(r).suffix.lower() in (".csv", ".parquet", ".feather"):
+        return "tabular_artifact"
+    return "other"
+
+
+def facets_and_boost_from_diff(diff_lines):
+    """From unified diff lines, infer notebook/code change facets and a short boosting hint."""
+    added = "\n".join(ln[1:] for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++"))
+    low = added.lower()
+    facets = []
+    pre = (
+        "fillna", "standardscaler", "minmaxscaler", "onehotencoder", "ordinalencoder",
+        "simpleimputer", "tfidf", "countvectorizer", "hashingvectorizer", "get_dummies",
+        "robustscaler", "powertransformer", "truncatedsvd", "pca", "knnimputer",
+        "columntransformer", "targetencoder", "labelencoder",
+    )
+    if any(p in low for p in pre):
+        facets.append("preprocessing")
+    model = (
+        "lgbm", "lightgbm", "xgbclassifier", "xgbregressor", "catboost",
+        ".fit(", "histgradientboosting", "randomforest", "logisticregression",
+        "gradientboosting", "extratrees", "mlpclassifier", "svc(", "kneighbors",
+    )
+    if any(p in low for p in model):
+        facets.append("model training")
+    if any(p in low for p in ("to_csv", "submission", "predictions")):
+        facets.append("prediction export")
+    if any(p in low for p in ("val_acc", "validation_accuracy", "accuracy_score", "roc_auc", "cross_val", "f1_score")):
+        facets.append("evaluation")
+
+    boost = ""
+    m = re.search(
+        r"(?:LGBM\w+|XGB\w+|CatBoost\w+|lgb\.train)\s*\(\s*([^)]{0,900})",
+        added,
+        re.I | re.DOTALL,
+    )
+    if m:
+        inner = re.sub(r"\s+", " ", m.group(0).strip())
+        boost = inner[:280] + ("..." if len(inner) > 280 else "")
+    else:
+        params = []
+        for pat, label in (
+            (r"num_leaves\s*=\s*\d+", "num_leaves"),
+            (r"learning_rate\s*=\s*[\d.eE+-]+", "learning_rate"),
+            (r"n_estimators\s*=\s*\d+", "n_estimators"),
+            (r"max_depth\s*=\s*[\d-]+", "max_depth"),
+            (r"subsample\s*=\s*[\d.]+", "subsample"),
+            (r"colsample_bytree\s*=\s*[\d.]+", "colsample_bytree"),
+        ):
+            mm = re.search(pat, added, re.I)
+            if mm:
+                params.append(mm.group(0).replace(" ", ""))
+        if params:
+            boost = "Boosting params touched: " + ", ".join(params[:6])
+
+    out_f = []
+    seen = set()
+    for f in facets:
+        if f not in seen:
+            seen.add(f)
+            out_f.append(f)
+    return out_f, boost
+
 
 def walk(base):
     files = {}
@@ -723,7 +800,7 @@ def classify(rel):
         return "binary"
     return "text"
 
-changes = []  # list of (status, rel, added, removed, diff_html)
+change_rows = []  # dicts: status, rel, kind, added, removed, diff_html, impact_bucket, facets, boost_snippet
 all_rels = sorted(set(snap_files) | set(root_files))
 for rel in all_rels:
     in_snap = rel in snap_files
@@ -746,6 +823,9 @@ for rel in all_rels:
     kind = classify(rel)
     added = removed = 0
     diff_html = ""
+    facets = []
+    boost_snippet = ""
+    ibucket = impact_bucket_for(rel)
 
     if kind == "notebook":
         # Diff only the cell source text (code + markdown). Skipping execution
@@ -774,6 +854,7 @@ for rel in all_rels:
             diff_html = f'<pre>notebook {status} (unparseable JSON; size {s1} \u2192 {s2} bytes)</pre>'
         else:
             diff_lines = list(difflib.unified_diff(a_src, b_src, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""))
+            facets, boost_snippet = facets_and_boost_from_diff(diff_lines)
             for ln in diff_lines:
                 if ln.startswith("+") and not ln.startswith("+++"):
                     added += 1
@@ -805,6 +886,7 @@ for rel in all_rels:
             diff_html = f'<pre>{status} (not UTF-8 readable)</pre>'
         else:
             diff_lines = list(difflib.unified_diff(a, b, fromfile=f"a/{rel}", tofile=f"b/{rel}", lineterm=""))
+            facets, boost_snippet = facets_and_boost_from_diff(diff_lines)
             for ln in diff_lines:
                 if ln.startswith("+") and not ln.startswith("+++"):
                     added += 1
@@ -826,9 +908,21 @@ for rel in all_rels:
             body = "\n".join(rendered) if rendered else "(no textual diff)"
             diff_html = f'<pre>{body}</pre>'
 
-    changes.append((status, rel, added, removed, diff_html))
+    change_rows.append({
+        "status": status,
+        "rel": rel,
+        "kind": kind,
+        "added": added,
+        "removed": removed,
+        "diff_html": diff_html,
+        "impact_bucket": ibucket,
+        "facets": facets,
+        "boost_snippet": boost_snippet,
+    })
 
-if not changes:
+changes = [(r["status"], r["rel"], r["added"], r["removed"], r["diff_html"]) for r in change_rows]
+
+if not change_rows:
     print('TITLE=No changes')
     print('        <div class="empty">No file changes detected.</div>')
     sys.exit(0)
@@ -859,20 +953,51 @@ if removed_names:
 parts.append(f'<span class="plus">+{total_added}</span> / <span class="minus">-{total_removed}</span>')
 summary = " \u00b7 ".join(parts)
 
+# Union of facets / buckets for subtitles
+_all_facets = []
+_bucket_order = []
+for _r in change_rows:
+    for _f in _r.get("facets") or []:
+        if _f not in _all_facets:
+            _all_facets.append(_f)
+    _b = _r.get("impact_bucket", "other")
+    if _b not in _bucket_order:
+        _bucket_order.append(_b)
+_boost_hints = [_r["boost_snippet"] for _r in change_rows if _r.get("boost_snippet")]
+
 # Human-friendly title for the card. Single-file actions get a specific verb.
 def _title():
-    n = len(changes)
+    n = len(change_rows)
     if n == 1:
-        st, rel, *_ = changes[0]
+        row = change_rows[0]
+        st, rel = row["status"], row["rel"]
         verb = {"added": "Added", "removed": "Removed", "modified": "Edited"}[st]
+        if rel.endswith(".ipynb") and st == "modified" and row.get("facets"):
+            return "Notebook: " + " + ".join(row["facets"])
+        bk = row["impact_bucket"]
+        if bk == "submission" and st == "added":
+            return f"Added submission artifact ({rel})"
+        if bk == "data" and st == "added":
+            return f"Added data ({rel})"
+        if bk == "notebook_pipeline" and st == "added":
+            return f"Added {rel}"
         return f'{verb} {rel}'
     if added_names and not modified_names and not removed_names:
+        if all(impact_bucket_for(x) == "data" for x in added_names):
+            return f'Added {len(added_names)} data file{"s" if len(added_names) != 1 else ""}'
         return f'Added {len(added_names)} file{"s" if len(added_names)!=1 else ""}'
     if modified_names and not added_names and not removed_names:
-        # E.g. "Edited solution.ipynb + 2 more"
         first = modified_names[0]
         extra = len(modified_names) - 1
+        if first.endswith(".ipynb") and _all_facets:
+            base = "Notebook: " + " + ".join(_all_facets)
+            return base + (f' (+{extra} more files)' if extra else '')
         return f'Edited {first}' + (f' + {extra} more' if extra else '')
+    if _all_facets and any(r["rel"].endswith(".ipynb") for r in change_rows):
+        tail = " + ".join(_all_facets[:4])
+        if len(_all_facets) > 4:
+            tail += ", ..."
+        return f"Multi-file notebook-related change: {tail}"
     return f'Changed {n} files'
 
 is_pure_add    = bool(added_names)    and not modified_names and not removed_names
@@ -884,13 +1009,29 @@ change_payload = {
     "title": _title(),
     "counts": {"added": len(added_names), "modified": len(modified_names), "removed": len(removed_names)},
     "line_churn": {"added": total_added, "removed": total_removed},
+    "impact": {
+        "buckets": _bucket_order,
+        "notebook_facets": _all_facets,
+        "boosting_hint": (_boost_hints[0] if _boost_hints else ""),
+    },
     "files": [
-        {"status": status, "path": rel, "added_lines": added, "removed_lines": removed}
-        for status, rel, added, removed, _ in changes
+        {
+            "status": r["status"],
+            "path": r["rel"],
+            "added_lines": r["added"],
+            "removed_lines": r["removed"],
+            "impact_bucket": r["impact_bucket"],
+            "facets": r["facets"],
+        }
+        for r in change_rows
     ],
 }
 print(f'CHANGE_JSON={json.dumps(change_payload, ensure_ascii=False)}')
 print(f'        <div class="meta">{summary}</div>')
+if _all_facets:
+    print(f'        <div class="meta" style="margin-top:6px;"><span class="pill info">Impact</span> {" + ".join(html.escape(f) for f in _all_facets)}</div>')
+elif _bucket_order and set(_bucket_order) != {"other"}:
+    print(f'        <div class="meta" style="margin-top:6px;"><span class="pill info">Areas</span> {", ".join(html.escape(b.replace("_", " ")) for b in _bucket_order)}</div>')
 
 if is_pure_add or is_pure_remove:
     # Compact card: pill badges only, no diff <details> block
@@ -950,15 +1091,27 @@ except json.JSONDecodeError:
 files = change.get("files") or []
 counts = change.get("counts") or {}
 churn = change.get("line_churn") or {}
+imp = change.get("impact") or {}
 n = len(files)
 added = int(churn.get("added") or 0)
 removed = int(churn.get("removed") or 0)
 top = ", ".join(f.get("path", "?") for f in files[:3]) if files else "no files"
+facets = imp.get("notebook_facets") or []
+buckets = imp.get("buckets") or []
+boost = (imp.get("boosting_hint") or "").strip()
+s1_parts = []
+if buckets:
+    s1_parts.append("Areas: " + ", ".join(str(b).replace("_", " ") for b in buckets))
+if facets:
+    s1_parts.append("Notebook work: " + ", ".join(facets))
+if boost:
+    s1_parts.append("Boosting detail: " + boost[:420])
+s1 = (" ".join(s1_parts) + " ") if s1_parts else ""
 fallback = (
-    f"Change set touched {n} file(s): {top}. "
-    f"Status mix added={counts.get('added', 0)}, modified={counts.get('modified', 0)}, removed={counts.get('removed', 0)}. "
-    f"Approximate line churn is +{added}/-{removed}. "
-    "Likely intent: iterate on implementation details and validate impact in the next metric run."
+    f"{s1}Updated {n} file(s) including {top}. "
+    f"Mix: {counts.get('added', 0)} added, {counts.get('modified', 0)} modified, {counts.get('removed', 0)} removed. "
+    f"About +{added}/-{removed} diff lines in tracked text. "
+    "Re-run the notebook to see whether validation improves."
 )
 
 endpoint = os.environ.get("AICODINGGYM_LLM_ENDPOINT", "").strip()
@@ -970,9 +1123,12 @@ if not endpoint or not api_key:
     raise SystemExit(0)
 
 prompt = (
-    "Summarize this code change for an MLE bench dashboard in 2 concise sentences. "
-    "Sentence 1: what changed concretely. Sentence 2: why it likely matters for model quality or reliability. "
-    "Use plain language, no markdown bullets.\n\n"
+    "Summarize this ML competition workspace change for a dashboard. "
+    "Reply with exactly 2 short sentences in clear English. No markdown or bullet characters. "
+    "Sentence 1: what changed, naming important paths and whether work was in the notebook, CSVs, or scripts. "
+    "If impact.notebook_facets is non-empty, mention those stages (e.g. preprocessing, model training, prediction export). "
+    "If impact.boosting_hint is non-empty, include the key LightGBM / XGBoost / CatBoost parameter clues in plain words. "
+    "Sentence 2: why this likely helps or hurts validation score or submission reliability.\n\n"
     + json.dumps(change, ensure_ascii=False)
 )
 payload = {
@@ -1195,46 +1351,46 @@ PY
 
 run_notebook_and_log_metric() {
   read_agent_note
-  if [[ ! -f “$NOTEBOOK_PATH” ]]; then
-    append_card “Notebook Metric” 'No <code>solution.ipynb</code> found yet' '        <div class=”empty”>Create solution.ipynb to enable automatic metric extraction.</div>'
+  if [[ ! -f "$NOTEBOOK_PATH" ]]; then
+    append_card "Notebook Metric" 'No <code>solution.ipynb</code> found yet' '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
     refresh_approach_panel
-    [[ -n “${APPROACH_SNAP_TMP:-}” ]] && rm -f “$APPROACH_SNAP_TMP”
+    [[ -n "${APPROACH_SNAP_TMP:-}" ]] && rm -f "$APPROACH_SNAP_TMP"
     return
   fi
   local change_note
-  change_note=”$(compute_notebook_change_note || true)”
+  change_note="$(compute_notebook_change_note || true)"
   local output status max_acc
   set +e
-  output=”$(“$PY_BIN” “$HELPER” “$NOTEBOOK_PATH” 2>&1)”
+  output="$("$PY_BIN" "$HELPER" "$NOTEBOOK_PATH" 2>&1)"
   status=$?
   set -e
-  max_acc=”$(printf “%s\n” “$output” | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)”
-  [[ -z “${max_acc:-}” ]] && max_acc=”NA”
+  max_acc="$(printf '%s\n' "$output" | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)"
+  [[ -z "${max_acc:-}" ]] && max_acc="NA"
   local tail_output
-  tail_output=”$(printf “%s\n” “$output” | tail -n “$MAX_OUTPUT_LINES”)”
+  tail_output="$(printf '%s\n' "$output" | tail -n "$MAX_OUTPUT_LINES")"
   local body
-  body=”$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
-    “$MAX_OUTPUT_LINES” \
-    “$(printf “%s” “$tail_output” | html_escape)”)”
+  body="$(printf '        <details>\n          <summary>Show notebook output (last %d lines)</summary>\n          <pre>%s</pre>\n        </details>' \
+    "$MAX_OUTPUT_LINES" \
+    "$(printf '%s' "$tail_output" | html_escape)")"
   # Refresh approach panel (creates snap with markers, splices into dashboard.html)
-  refresh_approach_panel “${AGENT_APPROACH:-}”
-  local snap_tmp=”${APPROACH_SNAP_TMP:-}”
+  refresh_approach_panel "${AGENT_APPROACH:-}"
+  local snap_tmp="${APPROACH_SNAP_TMP:-}"
   local meta
-  if [[ “$status” -ne 0 ]]; then
-    meta='<span class=”pill fail”>exit '”$status”'</span> <code>MAX_VALIDATION_ACCURACY='”$max_acc”'</code>'
-    append_card “Notebook Metric” “$meta” “$body” “” “$change_note” “$snap_tmp” “” \
-      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
-  elif [[ “$max_acc” == “NA” ]]; then
-    meta=”<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook”
-    append_card “Notebook Metric” “$meta” “$body” “” “$change_note” “$snap_tmp” “” \
-      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
+  if [[ "$status" -ne 0 ]]; then
+    meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
+    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
+  elif [[ "$max_acc" == "NA" ]]; then
+    meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
+    append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
   else
-    meta=”<code>MAX_VALIDATION_ACCURACY=$max_acc</code>”
-    append_card “Notebook Metric” “$meta” “$body” “$max_acc” “$change_note” “$snap_tmp” “” \
-      “${AGENT_SUMMARY:-}” “” “” “${AGENT_WHY:-}” “${AGENT_STAGE:-}” “${AGENT_IMPACT:-}”
+    meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
+    append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp" "" \
+      "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}"
   fi
-  [[ -n “$snap_tmp” ]] && rm -f “$snap_tmp”
-  cp -f “$NOTEBOOK_PATH” “$ROOT_DIR/.supervisor_prev_notebook.ipynb” 2>/dev/null || true
+  [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
+  cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true
 }
 
 run_wrapped_command() {
