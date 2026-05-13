@@ -26,9 +26,10 @@ Design goals:
     * Auto-detect arbitrary libraries by import path, not just a fixed allowlist.
     * Surface rule-based / regex / memorization pipelines so rule-heavy problems
       (e.g. text normalization) still produce a meaningful summary.
-    * Never leave a panel fully empty: if nothing else matches, fall back to
-      "Custom logic in solution.ipynb (<N> code cells, <M> imports)" so the user
-      still sees the notebook is wired up.
+    * Do not infer a full approach from import lines alone. Import-only
+      notebooks show a short "add training or evaluation code" placeholder.
+    * Once real pipeline code exists, never leave a column empty: fall back to
+      generic hints so the user still sees the notebook is wired up.
 """
 from __future__ import annotations
 
@@ -442,7 +443,7 @@ MODULE_BUCKET: List[Tuple[str, str]] = [
 def _load_notebook(nb_path: Path) -> Tuple[str, int, int]:
     """Return (concatenated source, code_cell_count, markdown_cell_count)."""
     try:
-        data = json.loads(nb_path.read_text(encoding="utf-8"))
+        data = json.loads(nb_path.read_text(encoding="utf-8-sig"))
     except Exception:
         return "", 0, 0
     pieces: List[str] = []
@@ -458,6 +459,35 @@ def _load_notebook(nb_path: Path) -> Tuple[str, int, int]:
         elif ct == "markdown":
             md_n += 1
     return "\n".join(pieces), code_n, md_n
+
+
+_IMPORT_LINE_ONLY = re.compile(
+    r"^\s*(?:from\s+[\w.]+\s+import\s+|import\s+)",
+)
+
+
+def _code_without_import_lines(src: str) -> str:
+    """Remove import/from lines so we do not treat bare imports as a pipeline."""
+    return "\n".join(ln for ln in src.splitlines() if not _IMPORT_LINE_ONLY.match(ln))
+
+
+def _has_executable_pipeline(body: str) -> bool:
+    """True when the notebook has real training, inference, CV, or scoring code."""
+    b = body.strip()
+    if not b:
+        return False
+    return bool(
+        re.search(r"\.(?:fit|fit_transform|partial_fit)\s*\(", b)
+        or re.search(r"\.predict(?:_proba)?\s*\(", b)
+        or re.search(r"\bVAL_ACC\s*:", b)
+        or re.search(r"\bvalidation_accuracy\s*:", b)
+        or re.search(r"\bcross_val_score\s*\(|\bcross_validate\s*\(", b)
+        or re.search(
+            r"\b(?:log_loss|roc_auc_score|accuracy_score|mean_squared_error|"
+            r"mean_absolute_error|r2_score|f1_score)\s*\(",
+            b,
+        )
+    )
 
 
 def _detect_ngram_ranges(src: str) -> Dict[str, List[str]]:
@@ -654,32 +684,67 @@ def _fallback_item(bucket: str, src: str, code_n: int) -> str:
     return _render_item(label, desc)
 
 
+def _pending_pipeline_html(notebook_path: Path, code_n: int, md_n: int) -> str:
+    """Placeholder when the notebook is mostly imports or has no train/eval code yet."""
+    nb_meta = f"{code_n} code cell(s), {md_n} markdown cell(s)"
+    return f"""<section id="approach" class="panel approach">
+  <div class="approach-header">
+    <h2>Approach summary</h2>
+    <span id="approachSelectionLabel" class="approach-sub">Showing latest metric run.</span>
+    <span class="approach-sub">Summaries are built from <b>executable</b> code in <code>{_h(notebook_path.name)}</code> &mdash; {_h(nb_meta)}. Import-only cells are ignored until you train or evaluate.</span>
+  </div>
+  <div id="trajectorySummary" class="trajectory-panel"></div>
+  <div id="approachDisplay">
+<!--BEGIN_APPROACH_DISPLAY-->
+  <div class="empty approach-pending">
+    <p><b>No approach details yet.</b> This panel lists preprocessing, models, and evaluation only after your notebook actually <em>does</em> something&mdash;for example <code>.fit(...)</code>, <code>.fit_transform(...)</code>, <code>.predict_proba(...)</code>, <code>train_test_split(...)</code>, cross-validation, common metric calls, or a <code>VAL_ACC:</code> line.</p>
+    <p class="approach-dim">Bare <code>import</code> lines alone are not shown here so the summary stays faithful to your implementation.</p>
+  </div>
+  <details class="approach-howto">
+    <summary>How the gym works (beginner walkthrough)</summary>
+    <ol>
+      <li><b>Pull</b> a problem with <code>aicodinggym mle download &lt;id&gt;</code>. The dataset lands in <code>data/</code> and <code>description.md</code> explains the task.</li>
+      <li><b>Build</b> <code>solution.ipynb</code>: load the data, preprocess it (turn raw text/tables into numbers or apply rules), fit a model or look things up, then write <code>submission.csv</code>.</li>
+      <li><b>Print</b> a line like <code>VAL_ACC: 0.91</code> at the end of the notebook. Higher is better. The supervisor reads that number and plots it.</li>
+      <li><b>Save</b>. The supervisor auto-runs the notebook, logs a card here, and refreshes this summary so you can see what your pipeline looks like.</li>
+      <li><b>Submit</b> when you're happy: <code>aicodinggym mle submit &lt;id&gt; -F submission.csv</code>.</li>
+    </ol>
+  </details>
+<!--END_APPROACH_DISPLAY-->
+  </div>
+</section>"""
+
+
 def build_html(notebook_path: Path) -> str:
     src, code_n, md_n = _load_notebook(notebook_path)
     if not src.strip():
         return _empty_section(f"No notebook content found at <code>{_h(str(notebook_path))}</code>.")
 
-    # --- curated token scan ---
-    ngrams = _detect_ngram_ranges(src)
+    body = _code_without_import_lines(src)
+    if not _has_executable_pipeline(body):
+        return _pending_pipeline_html(notebook_path, code_n, md_n)
+
+    # --- curated token scan (executable code only; import lines removed) ---
+    ngrams = _detect_ngram_ranges(body)
     extra: Dict[str, str] = {}
     for cls, labels in ngrams.items():
         clean = [l for l in labels if l]
         if clean:
             extra[cls] = ", ".join(sorted(set(clean)))
 
-    preproc_tok = _find_tokens(src, PREPROC_KEYS)
-    model_tok = _find_tokens(src, MODEL_KEYS)
-    cv_tok = _find_tokens(src, CV_KEYS)
-    metric_tok = _find_tokens(src, METRIC_KEYS)
+    preproc_tok = _find_tokens(body, PREPROC_KEYS)
+    model_tok = _find_tokens(body, MODEL_KEYS)
+    cv_tok = _find_tokens(body, CV_KEYS)
+    metric_tok = _find_tokens(body, METRIC_KEYS)
 
     # --- pattern scan (buckets: preproc/model/cv/metric) ---
     pattern_hits: Dict[str, List[Tuple[str, str]]] = {"preproc": [], "model": [], "cv": [], "metric": []}
     for pat, bucket, label, desc in PATTERNS:
-        if re.search(pat, src):
+        if re.search(pat, body):
             if (label, desc) not in pattern_hits[bucket]:
                 pattern_hits[bucket].append((label, desc))
 
-    # --- import scan (covers libraries outside the curated list) ---
+    # --- import scan (non-import lines only: avoids "TF-IDF" from a bare import) ---
     # Bare stdlib imports that are plumbing, not a "technique" worth showing
     # (their actual usage is surfaced by the PATTERNS block more specifically).
     STDLIB_SKIP = {
@@ -688,7 +753,7 @@ def build_html(notebook_path: Path) -> str:
         "hashlib", "random", "string", "io", "copy", "warnings", "logging",
         "argparse", "pickle", "subprocess", "glob", "shutil", "zipfile",
     }
-    imports = _scan_imports(src)
+    imports = _scan_imports(body)
     seen_mods: set[str] = set()
     import_hits: Dict[str, List[Tuple[str, str]]] = {"preproc": [], "model": [], "cv": [], "metric": []}
     for mod, alias in imports:
@@ -738,17 +803,17 @@ def build_html(notebook_path: Path) -> str:
             seen_labels.add(label)
             items.append(_render_item(label, desc))
         if not items:
-            return _fallback_item(bucket, src, code_n)
+            return _fallback_item(bucket, body, code_n)
         return "\n".join(items)
 
     preproc_html = merge_bucket(preproc_tok, "preproc", token_extra=extra)
     model_html = merge_bucket(model_tok, "model")
-    for boost_line in _detect_boosting_param_lines(src):
+    for boost_line in _detect_boosting_param_lines(body):
         model_html += "\n" + boost_line
     cv_html = merge_bucket(cv_tok, "cv")
     metric_html = merge_bucket(metric_tok, "metric")
 
-    blend = _blend_hint(src)
+    blend = _blend_hint(body)
     if blend:
         model_html += "\n" + _render_item("Blend", blend)
 
@@ -757,7 +822,7 @@ def build_html(notebook_path: Path) -> str:
   <div class="approach-header">
     <h2>Approach summary</h2>
     <span id="approachSelectionLabel" class="approach-sub">Showing latest metric run.</span>
-    <span class="approach-sub">Auto-detected from <code>{_h(notebook_path.name)}</code> \u2014 {_h(nb_meta)}. Refreshes on save.</span>
+    <span class="approach-sub">Inferred from executable code in <code>{_h(notebook_path.name)}</code> \u2014 {_h(nb_meta)}. Bare import lines are ignored; refreshes on save.</span>
   </div>
   <div id="trajectorySummary" class="trajectory-panel"></div>
   <div id="approachDisplay">

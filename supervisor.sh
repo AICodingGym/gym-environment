@@ -41,9 +41,9 @@ read_agent_note() {
   AGENT_NEXT_PROMPT=""
   AGENT_PROMPT_ID=""
   AGENT_PROMPT_TS=""
-  [[ -f "$AGENT_NOTE_PATH" ]] || return 0
-  local parsed
-  parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
+  if [[ -f "$AGENT_NOTE_PATH" ]]; then
+    local parsed
+    parsed="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" 2>/dev/null <<'PY'
 import json, sys, pathlib
 try:
     data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
@@ -87,9 +87,17 @@ for var in [
     val = resolved.get(var, "").replace("\n", " ").replace("'", "'\\''")
     print(f"{var}='{val}'")
 PY
-  )" || true
-  [[ -n "$parsed" ]] && eval "$parsed"
-  rm -f "$AGENT_NOTE_PATH"
+    )" || true
+    [[ -n "$parsed" ]] && eval "$parsed"
+    rm -f "$AGENT_NOTE_PATH"
+  fi
+  # Plain-text prompt fallback: agent writes .prompt (one file, no JSON required).
+  # Cursor, Windsurf, and other tools that skip .agent_note.json can use this.
+  # Not deleted — persists as the current prompt context until the user updates it.
+  local _pt="$ROOT_DIR/.prompt"
+  if [[ -f "$_pt" ]] && [[ -z "${AGENT_PROMPT:-}" ]]; then
+    AGENT_PROMPT="$(tr '\n' ' ' <"$_pt")"
+  fi
 }
 
 timestamp() {
@@ -692,6 +700,7 @@ snapshot_workspace() {
       --exclude ".supervisor.lock" \
       --exclude ".supervisor_prev_notebook.ipynb" \
       --exclude "dashboard.html" \
+      --exclude ".prompt" \
       "$ROOT_DIR/" "$SNAPSHOT_DIR/"
     return
   fi
@@ -704,6 +713,7 @@ snapshot_workspace() {
       -name .supervisor.lock -prune -o \
       -name .supervisor_prev_notebook.ipynb -prune -o \
       -name dashboard.html -prune -o \
+      -name .prompt -prune -o \
       -print0 |
       while IFS= read -r -d '' path; do
         [[ "$path" == "." ]] && continue
@@ -731,7 +741,7 @@ import difflib, html, json, os, re, sys, pathlib, filecmp
 
 snap, root, max_lines = sys.argv[1], sys.argv[2], int(sys.argv[3])
 SKIP_DIRS = {".git", ".supervisor_snapshot", "__pycache__"}
-SKIP_NAMES = {".supervisor.lock", ".supervisor_prev_notebook.ipynb", "dashboard.html"}
+SKIP_NAMES = {".supervisor.lock", ".supervisor_prev_notebook.ipynb", "dashboard.html", ".prompt"}
 BINARY_SUFFIXES = {".zip", ".gz", ".tar", ".pkl", ".joblib", ".npy", ".npz", ".parquet", ".pt", ".pth", ".bin", ".onnx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".csv", ".xls", ".xlsx"}
 
 def impact_bucket_for(rel):
@@ -1044,6 +1054,80 @@ def _title():
         return f"Multi-file notebook-related change: {tail}"
     return f'Changed {n} files'
 
+# ── Per-cell notebook analysis ───────────────────────────────────────────────
+_CELL_PURPOSE_MAP = [
+    (["!pip","!conda","import ","from "],                                      "setup",         "info"),
+    (["read_csv","read_parquet","pd.read","load_data","dataset"],              "data loading",  "info"),
+    (["fillna","dropna","standardscaler","minmaxscaler","onehotencoder",
+      "labelencoder","get_dummies","tfidf","countvectorizer","simpleimputer",
+      "robustscaler","columntransformer","targetencoder","powertransformer"],  "preprocessing", "ok"),
+    (["lgbm","lightgbm","xgbclassifier","xgbregressor","catboost",
+      "randomforestclassifier","randomforestregressor","histgradientboosting",
+      "logisticregression","gradientboosting","mlpclassifier","svc(",
+      "kneighborsclassifier","extratrees","decisiontree"],                     "model",         "ok"),
+    ([".fit(","model.train","lgb.train","xgb.train","cross_val","kfold",
+      "stratifiedkfold"],                                                       "training",      "ok"),
+    (["val_acc","validation_accuracy","accuracy_score","roc_auc",
+      "f1_score","mean_squared_error","print(f\"val","print(\"val"],           "evaluation",    "info"),
+    (["to_csv","submission","predict(","predict_proba("],                      "prediction",    "info"),
+]
+
+def _cell_purpose(src):
+    low = src.lower()
+    for kws, purpose, pill_cls in _CELL_PURPOSE_MAP:
+        if any(k in low for k in kws):
+            return purpose, pill_cls
+    return "code", "info"
+
+def _cell_detail(src):
+    low = src.lower()
+    mm = re.search(
+        r"(LGBM\w+|XGB\w+|CatBoost\w+|RandomForest\w+|HistGradientBoosting\w+|"
+        r"LogisticRegression|GradientBoosting\w+|MLPClassifier|SVC\b|SVR\b|"
+        r"KNeighbors\w+|ExtraTrees\w+|DecisionTree\w+)", src, re.IGNORECASE)
+    parts = [mm.group(1)] if mm else []
+    for pat, lbl in [
+        (r"n_estimators\s*=\s*(\d+)",        "n_estimators"),
+        (r"learning_rate\s*=\s*([\d.eE+-]+)","lr"),
+        (r"max_depth\s*=\s*([\d-]+)",        "max_depth"),
+        (r"num_leaves\s*=\s*(\d+)",          "num_leaves"),
+        (r"subsample\s*=\s*([\d.]+)",        "subsample"),
+        (r"colsample_bytree\s*=\s*([\d.]+)", "colsample_bytree"),
+        (r"min_child_samples\s*=\s*(\d+)",   "min_child_samples"),
+    ]:
+        m2 = re.search(pat, src, re.IGNORECASE)
+        if m2:
+            parts.append(f"{lbl}={m2.group(1)}")
+    if not parts:
+        steps = []
+        if "fillna" in low: steps.append("fill NA")
+        if any(p in low for p in ["standardscaler","minmaxscaler","robustscaler"]): steps.append("scale")
+        if any(p in low for p in ["onehotencoder","get_dummies","ordinalencoder","labelencoder"]): steps.append("encode cats")
+        if any(p in low for p in ["tfidf","countvectorizer","hashingvectorizer"]): steps.append("vectorize text")
+        if "imputer" in low: steps.append("impute")
+        parts = steps
+    if not parts:
+        libs = list(dict.fromkeys(re.findall(r"(?:import|from)\s+(\w+)", src)))
+        if libs: parts = [", ".join(libs[:5])]
+    return " | ".join(parts[:6])
+
+def _analyze_nb_cells(nb_path):
+    try:
+        data = json.loads(pathlib.Path(nb_path).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for idx, cell in enumerate(data.get("cells", [])):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", [])
+        if isinstance(src, list): src = "".join(src)
+        if not src.strip(): continue
+        purpose, pill_cls = _cell_purpose(src)
+        detail = _cell_detail(src)
+        out.append((idx, purpose, pill_cls, detail))
+    return out
+
 is_pure_add    = bool(added_names)    and not modified_names and not removed_names
 is_pure_remove = bool(removed_names)  and not modified_names and not added_names
 
@@ -1077,33 +1161,67 @@ if _all_facets:
 elif _bucket_order and set(_bucket_order) != {"other"}:
     print(f'        <div class="meta" style="margin-top:6px;"><span class="pill info">Areas</span> {", ".join(html.escape(b.replace("_", " ")) for b in _bucket_order)}</div>')
 
-if is_pure_add or is_pure_remove:
-    # Compact card: pill badges only, no diff <details> block
-    color_cls = "ok" if is_pure_add else "fail"
-    verb      = "Created" if is_pure_add else "Deleted"
-    names     = added_names if is_pure_add else removed_names
-    pills = " ".join(
-        f'<span class="pill {color_cls}"><code>{html.escape(n)}</code></span>'
-        for n in names[:8]
-    )
-    extra = len(names) - 8
-    if extra > 0:
-        pills += f' <span class="muted">+{extra} more</span>'
-    print(f'        <div class="meta" style="margin-top:6px;">{verb}: {pills}</div>')
-else:
-    # Full diff block
-    print('        <details>')
-    print('          <summary>Show per-file diffs</summary>')
-    for status, rel, added, removed, diff_html in changes:
-        badge = {"added":"<span class=\"pill info\">added</span>", "removed":"<span class=\"pill fail\">removed</span>", "modified":"<span class=\"pill info\">modified</span>"}[status]
-        header = f'{badge} <code>{html.escape(rel)}</code>'
-        if added or removed:
-            header += f' <span class="plus">+{added}</span> / <span class="minus">-{removed}</span>'
-        print('          <details>')
-        print(f'            <summary>{header}</summary>')
-        print(f'            {diff_html}')
-        print('          </details>')
+# Separate solution notebook from all other changed files
+solution_row = next((r for r in change_rows if r["rel"] == "solution.ipynb" or r["rel"].endswith("/solution.ipynb")), None)
+other_rows   = [r for r in change_rows if r is not solution_row] if solution_row else change_rows
+
+if solution_row:
+    # ── Cell-by-cell pipeline log ─────────────────────────────────────────
+    nb_abs = os.path.join(root, solution_row["rel"])
+    cells = _analyze_nb_cells(nb_abs)
+    if cells:
+        print('        <div style="margin-top:8px;padding:10px 12px;background:var(--surface-muted);border:1px solid var(--border);border-radius:8px;">')
+        print('          <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Notebook pipeline</div>')
+        for idx, purpose, pill_cls, detail in cells:
+            det_html = f' <span style="color:var(--text-soft);font-size:12px;">{html.escape(detail)}</span>' if detail else ""
+            print(f'          <div style="display:flex;align-items:baseline;gap:8px;margin:3px 0;">'
+                  f'<span style="color:var(--muted);font-size:11px;min-width:44px;">cell {idx}</span>'
+                  f'<span class="pill {pill_cls}" style="font-size:10px;">{html.escape(purpose)}</span>'
+                  f'{det_html}</div>')
+        print('        </div>')
+    # Collapsible raw diff for solution.ipynb only
+    st2, a2, r2 = solution_row["status"], solution_row["added"], solution_row["removed"]
+    badge2 = {"added":"<span class=\"pill info\">added</span>","removed":"<span class=\"pill fail\">removed</span>","modified":"<span class=\"pill info\">modified</span>"}[st2]
+    hdr2 = f'{badge2} <code>{html.escape(solution_row["rel"])}</code>'
+    if a2 or r2:
+        hdr2 += f' <span class="plus">+{a2}</span> / <span class="minus">-{r2}</span>'
+    print('        <details style="margin-top:6px;">')
+    print(f'          <summary>{hdr2} — show diff</summary>')
+    print(f'          {solution_row["diff_html"]}')
     print('        </details>')
+    # Compact list of other changed files (no full diff)
+    if other_rows:
+        other_esc = [f'<code>{html.escape(r["rel"])}</code>' for r in other_rows[:6]]
+        extra_ct = len(other_rows) - len(other_esc)
+        tail = f' <span class="muted">+{extra_ct} more</span>' if extra_ct > 0 else ""
+        print(f'        <div class="meta muted" style="margin-top:4px;font-size:11.5px;">Also changed: {", ".join(other_esc)}{tail}</div>')
+else:
+    # No solution.ipynb — original display behaviour
+    if is_pure_add or is_pure_remove:
+        color_cls = "ok" if is_pure_add else "fail"
+        verb      = "Created" if is_pure_add else "Deleted"
+        names     = added_names if is_pure_add else removed_names
+        pills = " ".join(
+            f'<span class="pill {color_cls}"><code>{html.escape(n)}</code></span>'
+            for n in names[:8]
+        )
+        extra = len(names) - 8
+        if extra > 0:
+            pills += f' <span class="muted">+{extra} more</span>'
+        print(f'        <div class="meta" style="margin-top:6px;">{verb}: {pills}</div>')
+    else:
+        print('        <details>')
+        print('          <summary>Show per-file diffs</summary>')
+        for status, rel, added, removed, diff_html in changes:
+            badge = {"added":"<span class=\"pill info\">added</span>","removed":"<span class=\"pill fail\">removed</span>","modified":"<span class=\"pill info\">modified</span>"}[status]
+            header = f'{badge} <code>{html.escape(rel)}</code>'
+            if added or removed:
+                header += f' <span class="plus">+{added}</span> / <span class="minus">-{removed}</span>'
+            print('          <details>')
+            print(f'            <summary>{header}</summary>')
+            print(f'            {diff_html}')
+            print('          </details>')
+        print('        </details>')
 PY
   cat "$body_file"
   rm -f "$body_file"
@@ -1394,7 +1512,7 @@ PY
 }
 
 run_notebook_and_log_metric() {
-  read_agent_note
+  [[ -f "$AGENT_NOTE_PATH" ]] && read_agent_note
   if [[ ! -f "$NOTEBOOK_PATH" ]]; then
     append_card "Notebook Metric" 'No <code>solution.ipynb</code> found yet' '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
     refresh_approach_panel
@@ -1421,6 +1539,9 @@ run_notebook_and_log_metric() {
   set -e
   max_acc="$(printf '%s\n' "$output" | grep -oE 'MAX_VALIDATION_ACCURACY=[^[:space:]]+' | tail -n1 | cut -d= -f2 || true)"
   [[ -z "${max_acc:-}" ]] && max_acc="NA"
+  local model_name hyperparams
+  model_name="$(printf '%s\n' "$output" | grep -oE 'MODEL_NAME=[^[:space:]]+' | tail -n1 | cut -d= -f2- || true)"
+  hyperparams="$(printf '%s\n' "$output" | grep -m1 '^HYPERPARAMS=' | sed 's/^HYPERPARAMS=//' || true)"
   local tail_output
   tail_output="$(printf '%s\n' "$output" | tail -n "$MAX_OUTPUT_LINES")"
   local prompt_key prompt_seq
@@ -1435,24 +1556,48 @@ run_notebook_and_log_metric() {
   # Refresh approach panel (creates snap with markers, splices into dashboard.html)
   refresh_approach_panel "${AGENT_APPROACH:-}"
   local snap_tmp="${APPROACH_SNAP_TMP:-}"
+  # Build model/hyperparams suffix shown in the metric card header
+  local meta_suffix=""
+  if [[ -n "${model_name:-}" ]]; then
+    meta_suffix=" <span class=\"pill info\">$(printf '%s' "${model_name}" | html_escape)</span>"
+  fi
+  if [[ -n "${hyperparams:-}" ]]; then
+    meta_suffix="${meta_suffix}<br><code style=\"font-size:11px;\">$(printf '%s' "${hyperparams}" | html_escape)</code>"
+  fi
   local meta
   if [[ "$status" -ne 0 ]]; then
-    meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'
+    meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'"${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
       "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   elif [[ "$max_acc" == "NA" ]]; then
-    meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook"
+    meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
       "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   else
-    meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>"
+    meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
       "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
   fi
   [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
+  # Persist metric to .metrics_log.jsonl so it survives dashboard resets.
+  if [[ "$max_acc" != "NA" ]]; then
+    PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - \
+      "$(timestamp)" "$max_acc" "${AGENT_PROMPT:-}" "$ROOT_DIR/.metrics_log.jsonl" \
+      "${model_name:-}" "${hyperparams:-}" \
+      2>/dev/null <<'PY' || true
+import json, sys
+ts, metric, prompt, log_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+model_name, hyperparams = (sys.argv[5] if len(sys.argv) > 5 else ""), (sys.argv[6] if len(sys.argv) > 6 else "")
+entry: dict = {"timestamp": ts, "metric": float(metric), "prompt": prompt}
+if model_name: entry["model"] = model_name
+if hyperparams: entry["hyperparams"] = hyperparams
+with open(log_path, "a", encoding="utf-8") as f:
+    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+PY
+  fi
   cp -f "$NOTEBOOK_PATH" "$ROOT_DIR/.supervisor_prev_notebook.ipynb" 2>/dev/null || true
 }
 
@@ -1513,11 +1658,12 @@ watch_loop() {
     first_run=1
   fi
   snapshot_workspace
+  read_agent_note
   # Populate the Approach summary panel immediately so users see it even
   # before the first notebook run completes.
   refresh_approach_panel
-  if [[ "$first_run" -eq 1 ]]; then
-    append_card "Supervisor Ready" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s â€“ edits you make will appear below" '        <div class="empty">No changes yet. Start codingâ€”each save will append a card.</div>'
+  if [[ “$first_run” -eq 1 ]]; then
+    append_card “Supervisor Ready” “<span class=\”pill info\”>watching</span> interval=${WATCH_INTERVAL}s â€” edits you make will appear below” '        <div class=”empty”>No changes yet. Start codingâ€”each save will append a card.</div>' “” “” “” “” “” “” “” “” “” “” “${AGENT_PROMPT:-}” “${AGENT_NEXT_PROMPT:-}”
     # Auto-open the dashboard only for manual terminal runs; when the aicodinggym
     # CLI spawns us in the background stdout is redirected to a file and will
     # pop the browser itself, so we skip to avoid opening two tabs.
@@ -1555,11 +1701,14 @@ watch_loop() {
     else
       change_json=""
     fi
+    read_agent_note
     summary_meta="$(hybrid_change_summary "$change_json")"
     ai_source="$(printf "%s\n" "$summary_meta" | sed -n 's/^SOURCE=//p' | head -n1)"
     ai_status="$(printf "%s\n" "$summary_meta" | sed -n 's/^STATUS=//p' | head -n1)"
     ai_text="$(printf "%s\n" "$summary_meta" | sed -n 's/^TEXT=//p' | head -n1)"
-    append_card "$title" "" "$body" "" "" "" "$change_json" "$ai_text" "$ai_source" "$ai_status"
+    append_card "$title" "" "$body" "" "" "" "$change_json" "$ai_text" "$ai_source" "$ai_status" \
+      "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}"
     run_notebook_and_log_metric
     snapshot_workspace
   done
