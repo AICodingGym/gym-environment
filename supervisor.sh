@@ -89,6 +89,31 @@ for var in [
 PY
     )" || true
     [[ -n "$parsed" ]] && eval "$parsed"
+    # Write notebook_analysis and model fields to persistent cache so they
+    # survive agent_note deletion and reach the metric card.
+    local _cache="$ROOT_DIR/.supervisor_agent_meta_cache.json"
+    PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$AGENT_NOTE_PATH" "$_cache" 2>/dev/null <<'PYCACHE' || true
+import json, sys, pathlib
+note_path = pathlib.Path(sys.argv[1])
+cache_path = pathlib.Path(sys.argv[2])
+if not note_path.exists():
+    sys.exit(0)
+try:
+    data = json.loads(note_path.read_text(encoding="utf-8-sig"))
+except Exception:
+    sys.exit(0)
+cache = {}
+nb = data.get("notebook_analysis", data.get("notebookAnalysis"))
+if isinstance(nb, dict) and nb.get("cells"):
+    cache["notebook_analysis"] = nb
+model = data.get("model")
+if isinstance(model, dict) and model:
+    cache["model"] = model
+if cache:
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
+elif cache_path.exists():
+    cache_path.unlink()
+PYCACHE
     rm -f "$AGENT_NOTE_PATH"
   fi
   # Plain-text prompt fallback: agent writes .prompt (one file, no JSON required).
@@ -227,6 +252,34 @@ ensure_dashboard() {
     .trajectory-panel ul { margin: 6px 0 0; padding-left: 18px; }
     .trajectory-panel strong { color: var(--text); }
     #metricChart circle.selected { stroke: #1C1917; stroke-width: 3px; }
+    /* Dot tooltip (model + hyperparams popup) ----------------------- */
+    #dot-tooltip {
+      display: none;
+      position: fixed;
+      width: 230px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow-md);
+      z-index: 200;
+      pointer-events: none;
+    }
+    #dot-tooltip.visible { display: block; }
+    .dot-tip-metric { font-size: 20px; font-weight: 800; color: var(--accent-strong); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+    .dot-tip-model { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 1px; }
+    .dot-tip-type { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+    .dot-tip-params { margin: 4px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 11.5px; }
+    .dot-tip-params dt { color: var(--muted); white-space: nowrap; }
+    .dot-tip-params dd { margin: 0; color: var(--text-soft); font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+    .dot-tip-empty { font-size: 12px; color: var(--muted); }
+    /* Cell breakdown in timeline groups ----------------------------- */
+    .cell-breakdown { margin: 8px 0 0; }
+    .cell-breakdown-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
+    .cell-row { display: flex; gap: 8px; margin: 4px 0; align-items: baseline; flex-wrap: wrap; }
+    .cell-role-badge { flex-shrink: 0; padding: 2px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; background: var(--accent-soft); color: var(--accent-strong); border: 1px solid #FED7AA; }
+    .cell-summary { font-size: 12.5px; color: var(--text-soft); }
+    .cell-why { font-size: 11px; color: var(--muted); font-style: italic; }
   </style>
 </head>
 <body>
@@ -259,6 +312,7 @@ ensure_dashboard() {
       <h2>Metric trend (<span id="metricDirection">higher is better</span>) <span class="approach-dim" style="font-weight:500;text-transform:none;letter-spacing:0;">&middot; oldest on the left, newest on the right &middot; click a dot for what changed</span></h2>
       <svg id="metricChart" viewBox="0 0 1000 210" preserveAspectRatio="xMidYMid meet"></svg>
       <div id="metricNote" class="empty" style="margin-top:6px;">Click a point on the chart to see a one-line summary of what changed to produce it.</div>
+      <div id="dot-tooltip" role="tooltip"></div>
     </div>
     <div id="cards"></div>
   </main>
@@ -382,6 +436,56 @@ ensure_dashboard() {
         return values.length ? values.length - 1 : -1;
       };
 
+      function hideDotTooltip() {
+        var t = document.getElementById('dot-tooltip');
+        if (t) t.classList.remove('visible');
+      }
+      function showDotTooltip(circleEl, metricVal, modelJsonStr) {
+        var t = document.getElementById('dot-tooltip');
+        if (!t) return;
+        var html = '<div class="dot-tip-metric">' + escapeHtml(fmt(metricVal)) + '</div>';
+        var hasModel = false;
+        if (modelJsonStr) {
+          try {
+            var m = JSON.parse(modelJsonStr);
+            if (m && typeof m === 'object') {
+              if (m.name) { html += '<div class="dot-tip-model">' + escapeHtml(m.name) + '</div>'; hasModel = true; }
+              if (m.type) { html += '<div class="dot-tip-type">' + escapeHtml(m.type) + '</div>'; }
+              var hp = m.hyperparams || m.hyperparameters;
+              if (hp && typeof hp === 'object' && Object.keys(hp).length) {
+                html += '<dl class="dot-tip-params">';
+                Object.keys(hp).forEach(function(k) {
+                  html += '<dt>' + escapeHtml(String(k)) + '</dt><dd>' + escapeHtml(String(hp[k])) + '</dd>';
+                });
+                html += '</dl>';
+              }
+            }
+          } catch (_) {}
+        }
+        if (!hasModel) {
+          html += '<div class="dot-tip-empty">No model info — add <code>model</code> to .agent_note.json</div>';
+        }
+        t.innerHTML = html;
+        t.classList.add('visible');
+        var r = circleEl.getBoundingClientRect();
+        var tw = 230;
+        var cx = r.left + r.width / 2;
+        var left = cx - tw / 2;
+        left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+        t.style.left = left + 'px';
+        var tipH = t.offsetHeight || 90;
+        var topAbove = r.top - tipH - 10;
+        t.style.top = (topAbove >= 8 ? topAbove : r.bottom + 10) + 'px';
+      }
+      document.addEventListener('click', function(e) {
+        if (!e.target.closest || (!e.target.closest('#dot-tooltip') && !e.target.closest('#metricChart'))) {
+          hideDotTooltip();
+        }
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideDotTooltip();
+      });
+
       function setSelectedDot(iSel) {
         if (!svg) return;
         svg.querySelectorAll("circle[data-i]").forEach(function (c) {
@@ -437,6 +541,13 @@ ensure_dashboard() {
         showNote(i);
         applyApproachForIndex(i);
         setSelectedDot(i);
+        var circle = svg ? svg.querySelector('circle[data-i="' + i + '"]') : null;
+        var modelJsonStr = metricCards[i] ? (metricCards[i].getAttribute('data-model-json') || '') : '';
+        if (circle) {
+          showDotTooltip(circle, values[i], modelJsonStr);
+        } else {
+          hideDotTooltip();
+        }
       }
 
       if (!values.length) {
@@ -579,6 +690,108 @@ ensure_dashboard() {
         });
       });
       selectDot(values.length - 1);
+
+      // ── renderCardEnhancements: prompt-group timeline with cell breakdown ──
+      function renderCardEnhancements() {
+        var allCards = Array.from(document.querySelectorAll('#cards .card'));
+        if (!allCards.length) return;
+
+        // Group cards by data-prompt-key (fall back to individual cards)
+        var groupMap = {};
+        var groupOrder = [];
+        allCards.forEach(function(card) {
+          var key = card.getAttribute('data-prompt-key') || ('__solo__' + groupOrder.length);
+          if (!groupMap[key]) {
+            groupMap[key] = { key: key, cards: [], files: [], notes: [] };
+            groupOrder.push(key);
+          }
+          var g = groupMap[key];
+          g.cards.push(card);
+          var note = card.getAttribute('data-note') || '';
+          if (note) g.notes.push(note);
+          var changeAttr = card.getAttribute('data-change') || '';
+          if (changeAttr) {
+            try {
+              var chg = JSON.parse(changeAttr);
+              (chg.files || []).forEach(function(f) {
+                if (f.path && g.files.indexOf(f.path) === -1) g.files.push(f.path);
+              });
+            } catch (_) {}
+          }
+        });
+
+        // Build timeline container
+        var cardsEl = document.getElementById('cards');
+        if (!cardsEl) return;
+        var timelineEl = document.createElement('div');
+        timelineEl.id = 'prompt-timeline';
+
+        groupOrder.forEach(function(key) {
+          var group = groupMap[key];
+          if (!group.cards.length) return;
+
+          // Files HTML
+          var filesHtml = '';
+          group.files.slice(0, 12).forEach(function(f) {
+            filesHtml += '<li><code>' + escapeHtml(f) + '</code></li>';
+          });
+          if (!filesHtml) {
+            group.cards.forEach(function(card) {
+              var h3 = card.querySelector('h3');
+              if (h3 && !filesHtml) filesHtml += '<li>' + escapeHtml(h3.textContent || '') + '</li>';
+            });
+          }
+
+          // Summary line from first card with data-ai-summary
+          var summaryLine = '';
+          group.cards.forEach(function(card) {
+            if (summaryLine) return;
+            summaryLine = card.getAttribute('data-ai-summary') || '';
+          });
+
+          // Cell breakdown from first card with data-notebook-analysis
+          let cellsHtml = '';
+          group.cards.forEach(function(card) {
+            if (cellsHtml) return;
+            var nbData = card.getAttribute('data-notebook-analysis') || '';
+            if (!nbData) return;
+            try {
+              var nb = JSON.parse(nbData);
+              var cells = (nb && nb.cells) ? nb.cells : (Array.isArray(nb) ? nb : []);
+              if (!cells.length) return;
+              var rows = '';
+              cells.forEach(function(cell) {
+                var role = String(cell.role || 'cell').replace(/-/g, ' ');
+                var summary = escapeHtml(String(cell.summary || ''));
+                var why = escapeHtml(String(cell.why || ''));
+                rows += '<div class="cell-row">'
+                  + '<span class="cell-role-badge">' + escapeHtml(role) + '</span>'
+                  + '<span class="cell-summary">' + summary
+                  + (why ? ' <span class="cell-why">— ' + why + '</span>' : '')
+                  + '</span></div>';
+              });
+              cellsHtml = '<div class="cell-breakdown"><p class="cell-breakdown-title">Notebook Cells (agent analysis)</p>' + rows + '</div>';
+            } catch (_) {}
+          });
+
+          var bodyBits = [
+            '<p class="prompt-block-title">All Changes</p><ul class="mini-list">' + (filesHtml || '<li class="muted">No files recorded</li>') + '</ul>'
+          ];
+          if (summaryLine) {
+            bodyBits.unshift('<p style="font-size:13px;color:var(--text-soft);margin:0 0 6px;">' + escapeHtml(summaryLine) + '</p>');
+          }
+          if (cellsHtml) bodyBits.push(cellsHtml);
+
+          // Attach cell breakdown to the first card in the group in the DOM
+          var firstCard = group.cards[0];
+          if (cellsHtml && !firstCard.querySelector('.cell-breakdown')) {
+            var cbDiv = document.createElement('div');
+            cbDiv.innerHTML = cellsHtml;
+            firstCard.appendChild(cbDiv.firstChild);
+          }
+        });
+      }
+      renderCardEnhancements();
     })();
   </script>
 </body>
@@ -610,12 +823,19 @@ append_card() {
   local next_prompt="${15:-}"
   local prompt_key="${16:-}"
   local prompt_seq="${17:-}"
+  local model_json="${18:-}"
+  local nb_analysis_json="${19:-}"
   local temp_file
   temp_file="$(mktemp)"
+  APPEND_CARD_MODEL_JSON="$model_json" \
+  APPEND_CARD_NB_ANALYSIS="$nb_analysis_json" \
   PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" - "$DASHBOARD_PATH" "$title" "$meta" "$metric" "$note" "$snap_path" "$change_json" "$ai_summary" "$ai_source" "$ai_status" "$why" "$stage" "$impact" "$prompt" "$next_prompt" "$prompt_key" "$prompt_seq" <<'PY' "$body_html" >"$temp_file"
 import re, sys, pathlib, datetime, html as _h
 
 dash_path, title, meta, metric, note, snap_path, change_json, ai_summary, ai_source, ai_status, why, stage, impact, prompt, next_prompt, prompt_key, prompt_seq, body = sys.argv[1:19]
+import os
+model_json = os.environ.get('APPEND_CARD_MODEL_JSON', '')
+nb_analysis_json = os.environ.get('APPEND_CARD_NB_ANALYSIS', '')
 
 
 def _extract_approach_snap(text: str) -> str:
@@ -670,6 +890,10 @@ if idx != -1:
         attrs += f' data-prompt-key="{_h.escape(prompt_key, quote=True)}"'
     if prompt_seq:
         attrs += f' data-prompt-seq="{_h.escape(prompt_seq, quote=True)}"'
+    if model_json:
+        attrs += f' data-model-json="{_h.escape(model_json, quote=True)}"'
+    if nb_analysis_json:
+        attrs += f' data-notebook-analysis="{_h.escape(nb_analysis_json, quote=True)}"'
     card_lines = [f'\n      <div class="card"{attrs}>']
     card_lines.append(f'        <div class="row"><h3>{title}</h3><span class="time">{ts}</span></div>')
     if meta:
@@ -1161,7 +1385,6 @@ if _all_facets:
 elif _bucket_order and set(_bucket_order) != {"other"}:
     print(f'        <div class="meta" style="margin-top:6px;"><span class="pill info">Areas</span> {", ".join(html.escape(b.replace("_", " ")) for b in _bucket_order)}</div>')
 
-# Separate solution notebook from all other changed files
 solution_row = next((r for r in change_rows if r["rel"] == "solution.ipynb" or r["rel"].endswith("/solution.ipynb")), None)
 other_rows   = [r for r in change_rows if r is not solution_row] if solution_row else change_rows
 
@@ -1179,7 +1402,6 @@ if solution_row:
                   f'<span class="pill {pill_cls}" style="font-size:10px;">{html.escape(purpose)}</span>'
                   f'{det_html}</div>')
         print('        </div>')
-    # Collapsible raw diff for solution.ipynb only
     st2, a2, r2 = solution_row["status"], solution_row["added"], solution_row["removed"]
     badge2 = {"added":"<span class=\"pill info\">added</span>","removed":"<span class=\"pill fail\">removed</span>","modified":"<span class=\"pill info\">modified</span>"}[st2]
     hdr2 = f'{badge2} <code>{html.escape(solution_row["rel"])}</code>'
@@ -1189,14 +1411,12 @@ if solution_row:
     print(f'          <summary>{hdr2} — show diff</summary>')
     print(f'          {solution_row["diff_html"]}')
     print('        </details>')
-    # Compact list of other changed files (no full diff)
     if other_rows:
         other_esc = [f'<code>{html.escape(r["rel"])}</code>' for r in other_rows[:6]]
         extra_ct = len(other_rows) - len(other_esc)
         tail = f' <span class="muted">+{extra_ct} more</span>' if extra_ct > 0 else ""
         print(f'        <div class="meta muted" style="margin-top:4px;font-size:11.5px;">Also changed: {", ".join(other_esc)}{tail}</div>')
 else:
-    # No solution.ipynb — original display behaviour
     if is_pure_add or is_pure_remove:
         color_cls = "ok" if is_pure_add else "fail"
         verb      = "Created" if is_pure_add else "Deleted"
@@ -1340,13 +1560,18 @@ APPROACH_SNAP_TMP=""
 # to pass to append_card(); caller must rm -f it.
 refresh_approach_panel() {
   local llm_prose="${1:-}"
+  local agent_cells_json="${2:-}"
   APPROACH_SNAP_TMP=""
   [[ -f "$APPROACH_HELPER" ]] || return 0
   [[ -f "$DASHBOARD_PATH" ]] || return 0
   local tmp_section snap_tmp
   tmp_section="$(mktemp)"
   snap_tmp="$(mktemp)"
-  if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$tmp_section" 2>/dev/null; then
+  local _approach_extra_args=()
+  if [[ -n "${agent_cells_json:-}" ]]; then
+    _approach_extra_args=(--agent-cells "$agent_cells_json")
+  fi
+  if ! PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" "$APPROACH_HELPER" "$NOTEBOOK_PATH" "$tmp_section" "${_approach_extra_args[@]}" 2>/dev/null; then
     rm -f "$tmp_section" "$snap_tmp"
     return 0
   fi
@@ -1512,7 +1737,28 @@ PY
 }
 
 run_notebook_and_log_metric() {
-  [[ -f "$AGENT_NOTE_PATH" ]] && read_agent_note
+  read_agent_note
+  local _cache="$ROOT_DIR/.supervisor_agent_meta_cache.json"
+  local _agent_model_json=""
+  local _agent_nb_analysis_json=""
+  if [[ -f "$_cache" ]]; then
+    _agent_model_json="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    m = d.get('model')
+    print(json.dumps(m) if m else '')
+except Exception: print('')
+" "$_cache" 2>/dev/null || true)"
+    _agent_nb_analysis_json="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    nb = d.get('notebook_analysis')
+    print(json.dumps(nb) if nb else '')
+except Exception: print('')
+" "$_cache" 2>/dev/null || true)"
+  fi
   if [[ ! -f "$NOTEBOOK_PATH" ]]; then
     append_card "Notebook Metric" 'No <code>solution.ipynb</code> found yet' '        <div class="empty">Create solution.ipynb to enable automatic metric extraction.</div>'
     refresh_approach_panel
@@ -1542,6 +1788,13 @@ run_notebook_and_log_metric() {
   local model_name hyperparams
   model_name="$(printf '%s\n' "$output" | grep -oE 'MODEL_NAME=[^[:space:]]+' | tail -n1 | cut -d= -f2- || true)"
   hyperparams="$(printf '%s\n' "$output" | grep -m1 '^HYPERPARAMS=' | sed 's/^HYPERPARAMS=//' || true)"
+  # Agent model data takes priority over auto-detected; merge if agent absent
+  local _combined_model_json="${_agent_model_json:-}"
+  if [[ -z "$_combined_model_json" ]] && [[ -n "${model_name:-}" ]]; then
+    local _hp_json="{}"
+    [[ -n "${hyperparams:-}" ]] && _hp_json="$(printf '{"raw":"%s"}' "$(printf '%s' "${hyperparams}" | sed 's/\\/\\\\/g; s/"/\\"/g')")"
+    _combined_model_json="{\"name\":\"$(printf '%s' "${model_name}" | sed 's/\\/\\\\/g; s/"/\\"/g')\",\"type\":\"auto-detected\",\"hyperparams\":$_hp_json}"
+  fi
   local tail_output
   tail_output="$(printf '%s\n' "$output" | tail -n "$MAX_OUTPUT_LINES")"
   local prompt_key prompt_seq
@@ -1554,7 +1807,20 @@ run_notebook_and_log_metric() {
     "$MAX_OUTPUT_LINES" \
     "$(printf '%s' "$tail_output" | html_escape)")"
   # Refresh approach panel (creates snap with markers, splices into dashboard.html)
-  refresh_approach_panel "${AGENT_APPROACH:-}"
+  # Extract cells array from agent notebook_analysis for approach panel
+  local _agent_cells_for_approach="[]"
+  if [[ -n "${_agent_nb_analysis_json:-}" ]]; then
+    _agent_cells_for_approach="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 "$PY_BIN" -c "
+import json, sys
+try:
+    nb = json.loads(sys.argv[1])
+    cells = nb.get('cells', []) if isinstance(nb, dict) else []
+    print(json.dumps(cells))
+except Exception:
+    print('[]')
+" "$_agent_nb_analysis_json" 2>/dev/null || echo '[]')"
+  fi
+  refresh_approach_panel "${AGENT_APPROACH:-}" "${_agent_cells_for_approach}"
   local snap_tmp="${APPROACH_SNAP_TMP:-}"
   # Build model/hyperparams suffix shown in the metric card header
   local meta_suffix=""
@@ -1569,17 +1835,20 @@ run_notebook_and_log_metric() {
     meta='<span class="pill fail">exit '"$status"'</span> <code>MAX_VALIDATION_ACCURACY='"$max_acc"'</code>'"${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq" \
+      "${_combined_model_json:-}" "${_agent_nb_analysis_json:-}"
   elif [[ "$max_acc" == "NA" ]]; then
     meta="<code>MAX_VALIDATION_ACCURACY=NA</code> — add <code>VAL_ACC: &lt;float&gt;</code> or <code>validation_accuracy: &lt;float&gt;</code> in your notebook${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq" \
+      "${_combined_model_json:-}" "${_agent_nb_analysis_json:-}"
   else
     meta="<code>MAX_VALIDATION_ACCURACY=$max_acc</code>${meta_suffix}"
     append_card "Notebook Metric" "$meta" "$body" "$max_acc" "$change_note" "$snap_tmp" "" \
       "${AGENT_SUMMARY:-}" "" "" "${AGENT_WHY:-}" "${AGENT_STAGE:-}" "${AGENT_IMPACT:-}" \
-      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq"
+      "${AGENT_PROMPT:-}" "${AGENT_NEXT_PROMPT:-}" "$prompt_key" "$prompt_seq" \
+      "${_combined_model_json:-}" "${_agent_nb_analysis_json:-}"
   fi
   [[ -n "$snap_tmp" ]] && rm -f "$snap_tmp"
   # Persist metric to .metrics_log.jsonl so it survives dashboard resets.
@@ -1658,12 +1927,11 @@ watch_loop() {
     first_run=1
   fi
   snapshot_workspace
-  read_agent_note
   # Populate the Approach summary panel immediately so users see it even
   # before the first notebook run completes.
   refresh_approach_panel
-  if [[ “$first_run” -eq 1 ]]; then
-    append_card “Supervisor Ready” “<span class=\”pill info\”>watching</span> interval=${WATCH_INTERVAL}s â€” edits you make will appear below” '        <div class=”empty”>No changes yet. Start codingâ€”each save will append a card.</div>' “” “” “” “” “” “” “” “” “” “” “${AGENT_PROMPT:-}” “${AGENT_NEXT_PROMPT:-}”
+  if [[ "$first_run" -eq 1 ]]; then
+    append_card "Supervisor Ready" "<span class=\"pill info\">watching</span> interval=${WATCH_INTERVAL}s â€“ edits you make will appear below" '        <div class="empty">No changes yet. Start codingâ€”each save will append a card.</div>'
     # Auto-open the dashboard only for manual terminal runs; when the aicodinggym
     # CLI spawns us in the background stdout is redirected to a file and will
     # pop the browser itself, so we skip to avoid opening two tabs.

@@ -74,6 +74,67 @@ def extract_values_from_notebook(notebook_path: Path) -> list[float]:
     return values
 
 
+MODEL_PATTERNS: list[tuple[str, str]] = [
+    (r"LGBMClassifier|LGBMRegressor|lgb\.train|lightgbm\.train", "LightGBM"),
+    (r"XGBClassifier|XGBRegressor|xgb\.train", "XGBoost"),
+    (r"CatBoostClassifier|CatBoostRegressor", "CatBoost"),
+    (r"RandomForestClassifier|RandomForestRegressor", "RandomForest"),
+    (r"HistGradientBoostingClassifier|HistGradientBoostingRegressor", "HistGradientBoosting"),
+    (r"LogisticRegression", "LogisticRegression"),
+    (r"GradientBoostingClassifier|GradientBoostingRegressor", "GradientBoosting"),
+    (r"SVC\b|SVR\b", "SVM"),
+    (r"MLPClassifier|MLPRegressor", "MLP"),
+    (r"KNeighborsClassifier|KNeighborsRegressor", "KNN"),
+    (r"ExtraTreesClassifier|ExtraTreesRegressor", "ExtraTrees"),
+    (r"DecisionTreeClassifier|DecisionTreeRegressor", "DecisionTree"),
+]
+
+HYPERPARAM_PATTERNS: list[tuple[str, str]] = [
+    (r"n_estimators\s*=\s*(\d+)", "n_estimators"),
+    (r"learning_rate\s*=\s*([\d.eE+-]+)", "learning_rate"),
+    (r"max_depth\s*=\s*([\d-]+)", "max_depth"),
+    (r"num_leaves\s*=\s*(\d+)", "num_leaves"),
+    (r"subsample\s*=\s*([\d.]+)", "subsample"),
+    (r"colsample_bytree\s*=\s*([\d.]+)", "colsample_bytree"),
+    (r"min_child_samples\s*=\s*(\d+)", "min_child_samples"),
+    (r"reg_alpha\s*=\s*([\d.eE+-]+)", "reg_alpha"),
+    (r"reg_lambda\s*=\s*([\d.eE+-]+)", "reg_lambda"),
+    (r"C\s*=\s*([\d.eE+-]+)", "C"),
+    (r"n_neighbors\s*=\s*(\d+)", "n_neighbors"),
+    (r"max_iter\s*=\s*(\d+)", "max_iter"),
+]
+
+
+def extract_model_info(notebook_path: Path) -> tuple[str, str]:
+    """Detect primary ML model and key hyperparameters from notebook source cells."""
+    try:
+        data = json.loads(notebook_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "", ""
+    parts: list[str] = []
+    for cell in data.get("cells", []):
+        if cell.get("cell_type") == "code":
+            src = cell.get("source", [])
+            if isinstance(src, list):
+                src = "".join(src)
+            parts.append(src)
+    all_source = "\n".join(parts)
+
+    model_name = ""
+    for pattern, name in MODEL_PATTERNS:
+        if re.search(pattern, all_source, re.IGNORECASE):
+            model_name = name
+            break
+
+    params: list[str] = []
+    for pattern, label in HYPERPARAM_PATTERNS:
+        m = re.search(pattern, all_source, re.IGNORECASE)
+        if m:
+            params.append(f"{label}={m.group(1)}")
+
+    return model_name, ", ".join(params[:8])
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: notebook_metrics.py <path-to-notebook>", file=sys.stderr)
@@ -99,6 +160,11 @@ def main() -> int:
         return 0 if exec_ok else 1
 
     print(f"MAX_VALIDATION_ACCURACY={max(values):.10g}")
+    model_name, hyperparams = extract_model_info(notebook_path)
+    if model_name:
+        print(f"MODEL_NAME={model_name}")
+    if hyperparams:
+        print(f"HYPERPARAMS={hyperparams}")
     return 0
 
 

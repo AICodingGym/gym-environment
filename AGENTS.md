@@ -156,27 +156,63 @@ After every significant change to your solution — model change, preprocessing 
 
 ```json
 {
-  "change_summary": "One sentence: what changed concretely.",
-  "why": "One sentence: reasoning — hypothesis or what problem this solves.",
-  "approach_description": "2–5 sentences describing the full current approach (preprocessing, model, eval, key decisions). Required on the first run and whenever the overall approach changes meaningfully.",
+  "user_prompt": "<exact text of the user message that triggered this change>",
+  "change_summary": "<one sentence — what concretely changed>",
+  "why": "<one sentence — reasoning or hypothesis behind this approach>",
+  "notebook_analysis": {
+    "cells": [
+      {
+        "cell_index": 1,
+        "role": "preprocessing",
+        "summary": "Reads training CSV and builds a majority-vote lookup dict keyed on token surface form",
+        "why": "Mode lookup is the strongest no-ML baseline — most tokens have one canonical normalization"
+      },
+      {
+        "cell_index": 2,
+        "role": "evaluation",
+        "summary": "Splits train on sentence_id % 10 == 0 for validation; computes token-level accuracy",
+        "why": "10% held-out slice matches competition evaluation; token accuracy is the target metric"
+      }
+    ]
+  },
+  "model": {
+    "name": "Mode Lookup (majority vote + bigram context)",
+    "type": "rule-based",
+    "hyperparams": {
+      "context_window": 1,
+      "fallback": "passthrough"
+    }
+  },
   "stage_label": "Stage 1: Baseline",
   "impact": "high"
 }
 ```
 
-| Field | Required | Notes |
-|---|---|---|
-| `change_summary` | yes | One sentence — what concretely changed |
-| `why` | yes | One sentence — reasoning or hypothesis |
-| `approach_description` | first run + on approach change | Full pipeline description for the approach panel |
-| `stage_label` | first run (use `"Stage 1: Baseline"`) | Update when strategy shifts (e.g. `"Stage 2: Semantic Features"`) |
-| `impact` | no | `"low"` / `"medium"` / `"high"` — drives visual accents on the dashboard |
+Field rules:
+  user_prompt         REQUIRED on every write. Copy the user's message verbatim.
+  change_summary      REQUIRED. One sentence, concrete action taken.
+  why                 REQUIRED. One sentence, hypothesis or reasoning.
+  notebook_analysis   REQUIRED on first run and whenever approach changes.
+    cells[]             One entry per code cell (skip markdown-only cells).
+      cell_index        0-based index in solution.ipynb (e.g. if cell 0 is a markdown header, the first code cell is index 1).
+      role              One of: setup | preprocessing | feature-engineering |
+                        model | evaluation | submission
+      summary           What the cell does (one sentence, plain English).
+      why               Why this technique/approach was chosen (one sentence).
+  model               REQUIRED on first run and whenever the model changes.
+    name              Human-readable model name (e.g. "XGBoost with early stopping").
+    type              One of: rule-based | sklearn | xgboost | lightgbm | catboost |
+                      pytorch | keras | transformers | ensemble | other
+                      (Use pytorch/keras/transformers for deep-learning frameworks, any architecture.)
+    hyperparams       Key-value dict of the most important parameters (keep to ≤8).
+  stage_label         Include on the very first write and when overall strategy shifts (not on every model tweak).
+  impact              Optional: "low" | "medium" | "high"
 
 **Rules:**
 - Write the file, then save the notebook/file (the supervisor reads it on the next watch cycle and deletes it)
-- `change_summary` and `why` are always required for significant changes
+- `user_prompt`, `change_summary`, and `why` are always required for significant changes
 - Omit the file entirely for trivial actions (typo fix, rename)
-- Example first run: set `stage_label` to `"Stage 1: Baseline"` and `approach_description` to your initial pipeline description
+- Example first run: set `stage_label` to `"Stage 1: Baseline"` and include `notebook_analysis` and `model`
 
 The supervisor reads `.agent_note.json` once per cycle, attaches the fields to the metric card, and shows them as a visible prose block on the dashboard.
 

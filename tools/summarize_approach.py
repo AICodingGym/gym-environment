@@ -880,17 +880,77 @@ def _empty_section(message: str) -> str:
 </section>"""
 
 
+# Maps agent-written role names to the 3-column grid (0=Preprocessing, 1=Model, 2=Evaluation)
+_ROLE_COLUMN: Dict[str, int] = {
+    "setup": 0,
+    "preprocessing": 0,
+    "feature-engineering": 1,
+    "model": 1,
+    "evaluation": 2,
+    "submission": 2,
+}
+_COLUMN_HEADERS = ["Preprocessing", "Model", "Evaluation"]
+
+
+def build_html_from_agent_cells(cells: list, nb_path: Path) -> str:
+    """Render 3-column approach grid from agent-written notebook_analysis.cells."""
+    cols: List[List[str]] = [[], [], []]
+    for cell in cells:
+        role = str(cell.get("role", "model")).lower().strip()
+        col_idx = _ROLE_COLUMN.get(role, 1)
+        summary = _h(str(cell.get("summary", "")))
+        why = _h(str(cell.get("why", "")))
+        label = _h(role.replace("-", " ").title())
+        item = f"<li><b>{label}</b> — {summary}"
+        if why:
+            item += f' <span style="color:var(--muted);font-size:11.5px;">({why})</span>'
+        item += "</li>"
+        cols[col_idx].append(item)
+    col_htmls = []
+    for header, items in zip(_COLUMN_HEADERS, cols):
+        inner = "<ul>" + "".join(items) + "</ul>" if items else '<ul><li class="empty">No cells assigned to this stage.</li></ul>'
+        col_htmls.append(f'<div class="approach-col"><h3>{header}</h3>{inner}</div>')
+    grid = '<div class="approach-grid">' + "".join(col_htmls) + "</div>"
+    sub = _h(nb_path.name)
+    return f"""<section id="approach" class="panel approach">
+  <div class="approach-header">
+    <h2>Approach summary</h2>
+    <span id="approachSelectionLabel" class="approach-sub">Showing latest metric run.</span>
+    <span class="approach-sub">Written by agent from <code>{sub}</code> — cell-by-cell breakdown.</span>
+  </div>
+  <div id="trajectorySummary" class="trajectory-panel"></div>
+  <div id="approachDisplay">
+<!--BEGIN_APPROACH_DISPLAY-->
+  {grid}
+<!--END_APPROACH_DISPLAY-->
+  </div>
+</section>"""
+
+
 def main(argv: List[str]) -> int:
-    if len(argv) < 3:
-        print("usage: summarize_approach.py <notebook_path> <out_html_path>", file=sys.stderr)
-        return 2
-    nb = Path(argv[1])
-    out = Path(argv[2])
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("notebook_path")
+    parser.add_argument("out_html_path")
+    parser.add_argument("--agent-cells", default="", dest="agent_cells")
+    args, _ = parser.parse_known_args(argv[1:])
+    nb = Path(args.notebook_path)
+    out = Path(args.out_html_path)
     try:
-        html_frag = build_html(nb) if nb.exists() else _empty_section(
-            f"Create <code>{_h(nb.name)}</code> to see the approach summary here."
-        )
-    except Exception as exc:  # pragma: no cover - defensive
+        if args.agent_cells:
+            import json as _json
+            cells = _json.loads(args.agent_cells)
+            if isinstance(cells, list) and cells:
+                html_frag = build_html_from_agent_cells(cells, nb)
+            else:
+                html_frag = build_html(nb) if nb.exists() else _empty_section(
+                    f"Create <code>{_h(nb.name)}</code> to see the approach summary here."
+                )
+        else:
+            html_frag = build_html(nb) if nb.exists() else _empty_section(
+                f"Create <code>{_h(nb.name)}</code> to see the approach summary here."
+            )
+    except Exception as exc:
         html_frag = _empty_section(f"Could not parse notebook: {_h(str(exc))}.")
     out.write_text(html_frag, encoding="utf-8", newline="\n")
     return 0
