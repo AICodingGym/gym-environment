@@ -137,9 +137,11 @@ PY_BIN="${PYTHON:-python}"
 command -v "$PY_BIN" >/dev/null 2>&1 || PY_BIN=python3
 
 ensure_dashboard() {
-  if [[ -f "$DASHBOARD_PATH" ]]; then
+  local _v="MLEL_DASH_V2"
+  if [[ -f "$DASHBOARD_PATH" ]] && grep -qF "$_v" "$DASHBOARD_PATH" 2>/dev/null; then
     return
   fi
+  rm -f "$DASHBOARD_PATH"
   cat >"$DASHBOARD_PATH" <<'EOF'
 <!doctype html>
 <html lang="en">
@@ -148,6 +150,7 @@ ensure_dashboard() {
   <meta http-equiv="refresh" content="5" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MLE Bench Logger</title>
+  <!-- MLEL_DASH_V2 -->
   <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23F97316'/><text x='50%25' y='56%25' text-anchor='middle' font-family='Consolas,monospace' font-size='18' font-weight='800' fill='white'>%3E_</text></svg>" />
   <style>
     :root {
