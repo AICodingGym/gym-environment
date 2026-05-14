@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MLE Logger</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3347;
+    --accent: #5c7cfa;
+    --green: #40c057;
+    --yellow: #fab005;
+    --red: #fa5252;
+    --text: #e2e8f0;
+    --muted: #8892a4;
+    --changed: rgba(250,176,5,0.12);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: .5px; }
+  .live-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .header-info { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  .layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  aside {
+    width: 240px;
+    min-width: 200px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .problem-group { border-bottom: 1px solid var(--border); }
+  .problem-label {
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .run-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background .1s;
+  }
+  .run-item:hover { background: var(--surface2); }
+  .run-item.active {
+    background: var(--surface2);
+    border-left-color: var(--accent);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .s-complete { background: var(--green); }
+  .s-running  { background: var(--yellow); animation: pulse 1s infinite; }
+  .s-failed   { background: var(--red); }
+  .s-pending  { background: var(--muted); }
+  .run-meta { flex: 1; overflow: hidden; }
+  .run-time { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .run-acc  { font-size: 12px; color: var(--text); font-weight: 600; }
+
+  /* ── Main panel ── */
+  main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .empty-state {
+    margin: auto;
+    text-align: center;
+    color: var(--muted);
+  }
+  .empty-state p { margin-top: 8px; font-size: 12px; }
+
+  .run-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .run-id { font-size: 16px; font-weight: 700; color: var(--text); }
+  .run-status-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .badge-complete { background: rgba(64,192,87,.15); color: var(--green); }
+  .badge-running  { background: rgba(250,176,5,.15);  color: var(--yellow); }
+  .badge-failed   { background: rgba(250,82,82,.15);  color: var(--red); }
+  .badge-pending  { background: rgba(136,146,164,.15);color: var(--muted); }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .card-title {
+    padding: 8px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .7px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .card-body { padding: 12px; }
+
+  /* Prompt */
+  details.prompt-details { }
+  details.prompt-details summary {
+    list-style: none;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 8px 12px;
+  }
+  details.prompt-details summary::-webkit-details-marker { display: none; }
+  details.prompt-details summary::before { content: '▶  '; font-size: 9px; }
+  details[open].prompt-details summary::before { content: '▼  '; }
+  .prompt-text {
+    padding: 10px 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-top: 1px solid var(--border);
+    line-height: 1.6;
+  }
+
+  /* Metrics */
+  .metrics-grid {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .metric-item { display: flex; flex-direction: column; gap: 2px; }
+  .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .metric-value { font-size: 20px; font-weight: 700; color: var(--text); }
+  .metric-value.null-val { font-size: 13px; color: var(--muted); }
+  .hyperparams { margin-top: 10px; }
+  .hyperparam-row { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; }
+  .hyperparam-key { color: var(--muted); }
+  .hyperparam-val { color: var(--text); }
+
+  /* Error box */
+  .error-box {
+    background: rgba(250,82,82,.08);
+    border: 1px solid rgba(250,82,82,.3);
+    border-radius: 4px;
+    padding: 10px 12px;
+    color: var(--red);
+    white-space: pre-wrap;
+    font-size: 11px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  /* Approach / Trajectory */
+  .prose {
+    line-height: 1.7;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+
+  /* Cell diff */
+  .cell-count { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  details.cell-details {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    overflow: hidden;
+  }
+  details.cell-details[data-changed="true"] { border-color: rgba(250,176,5,.4); background: var(--changed); }
+  details.cell-details summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 7px 10px;
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.cell-details summary::-webkit-details-marker { display: none; }
+  .cell-arrow { font-size: 9px; }
+  details[open].cell-details .cell-arrow::before { content: '▼'; }
+  .cell-arrow::before { content: '▶'; }
+  .cell-tag {
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .tag-changed  { background: rgba(250,176,5,.2); color: var(--yellow); }
+  .tag-new      { background: rgba(92,124,250,.2); color: var(--accent); }
+  .tag-same     { background: rgba(136,146,164,.1); color: var(--muted); }
+  .tag-first    { background: rgba(64,192,87,.1); color: var(--green); }
+
+  .cell-inner { padding: 0 10px 10px; }
+  .cell-section-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 8px 0 4px; }
+  pre.cell-source, pre.cell-output {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    max-height: 300px;
+    overflow-y: auto;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="live-dot"></div>
+  <h1>MLE Logger</h1>
+  <span class="header-info" id="last-updated">—</span>
+</header>
+
+<div class="layout">
+  <aside id="sidebar">
+    <div class="empty-state" style="padding:20px;color:var(--muted);font-size:11px">
+      No runs yet.<br>Save a solution.ipynb to start.
+    </div>
+  </aside>
+
+  <main id="detail">
+    <div class="empty-state">
+      <div style="font-size:32px">⬡</div>
+      <p>Select a run from the sidebar.</p>
+    </div>
+  </main>
+</div>
+
+<script>
+  const API = '';
+  let allRuns = [];
+  let selectedRunId = null;
+  let pollTimer = null;
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + fmtTime(iso);
+  }
+
+  function statusClass(status) {
+    return { complete: 's-complete', running: 's-running', failed: 's-failed', pending: 's-pending' }[status] || 's-pending';
+  }
+
+  function badgeClass(status) {
+    return { complete: 'badge-complete', running: 'badge-running', failed: 'badge-failed', pending: 'badge-pending' }[status] || 'badge-pending';
+  }
+
+  function esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Sidebar render ────────────────────────────────────────────────────────
+
+  function renderSidebar(runs) {
+    if (!runs.length) {
+      document.getElementById('sidebar').innerHTML =
+        '<div style="padding:20px;color:var(--muted);font-size:11px">No runs yet.<br>Save a solution.ipynb to start.</div>';
+      return;
+    }
+
+    const byProblem = {};
+    for (const r of runs) {
+      (byProblem[r.problem] = byProblem[r.problem] || []).push(r);
+    }
+
+    let html = '';
+    for (const [problem, pRuns] of Object.entries(byProblem)) {
+      html += `<div class="problem-group">
+        <div class="problem-label">${esc(problem)}</div>`;
+      for (const r of pRuns) {
+        const active = r.run_id === selectedRunId ? ' active' : '';
+        const acc = r.accuracy != null ? r.accuracy.toFixed(4) : '—';
+        html += `<div class="run-item${active}" data-run-id="${esc(r.run_id)}" onclick="selectRun('${esc(r.run_id)}')">
+          <div class="status-dot ${statusClass(r.status)}"></div>
+          <div class="run-meta">
+            <div class="run-acc">${acc}</div>
+            <div class="run-time">${fmtTime(r.timestamp)}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    document.getElementById('sidebar').innerHTML = html;
+  }
+
+  // ── Detail panel render ───────────────────────────────────────────────────
+
+  function renderDetail(run) {
+    if (!run) {
+      document.getElementById('detail').innerHTML =
+        '<div class="empty-state"><div style="font-size:32px">⬡</div><p>Select a run from the sidebar.</p></div>';
+      return;
+    }
+
+    let html = `
+      <div class="run-header">
+        <span class="run-id">${esc(run.run_id)}</span>
+        <span class="run-status-badge ${badgeClass(run.status)}">${esc(run.status)}</span>
+        <span style="color:var(--muted);font-size:11px">${fmtDate(run.timestamp)}</span>
+        ${run.duration_seconds != null ? `<span style="color:var(--muted);font-size:11px">${run.duration_seconds}s</span>` : ''}
+      </div>`;
+
+    // Error
+    if (run.notebook_error) {
+      html += `<div class="card">
+        <div class="card-title" style="color:var(--red)">Notebook Error</div>
+        <div class="card-body"><div class="error-box">${esc(run.notebook_error)}</div></div>
+      </div>`;
+    }
+
+    // Prompt
+    if (run.prompt != null) {
+      html += `<div class="card">
+        <div class="card-title">Prompt</div>
+        <details class="prompt-details">
+          <summary>Run ${esc(run.run_id)} — click to expand</summary>
+          <div class="prompt-text">${esc(run.prompt)}</div>
+        </details>
+      </div>`;
+    }
+
+    // Metrics
+    const m = run.metrics || {};
+    html += `<div class="card">
+      <div class="card-title">Metrics</div>
+      <div class="card-body">
+        <div class="metrics-grid">
+          <div class="metric-item">
+            <span class="metric-label">Accuracy</span>
+            ${m.accuracy != null
+              ? `<span class="metric-value">${m.accuracy.toFixed(4)}</span>`
+              : `<span class="metric-value null-val">—</span>`}
+          </div>
+          <div class="metric-item">
+            <span class="metric-label">Loss</span>
+            ${m.loss != null
+              ? `<span class="metric-value">${m.loss.toFixed(4)}</span>`
+              : `<span class="metric-value null-val">—</span>`}
+          </div>
+        </div>
+        ${m.hyperparams && Object.keys(m.hyperparams).length ? `
+        <div class="hyperparams">
+          ${Object.entries(m.hyperparams).map(([k,v]) =>
+            `<div class="hyperparam-row"><span class="hyperparam-key">${esc(k)}</span><span class="hyperparam-val">${esc(String(v))}</span></div>`
+          ).join('')}
+        </div>` : ''}
+      </div>
+    </div>`;
+
+    // Approach
+    if (run.approach_summary) {
+      html += `<div class="card">
+        <div class="card-title">Approach</div>
+        <div class="card-body"><p class="prose">${esc(run.approach_summary)}</p></div>
+      </div>`;
+    }
+
+    // Cell diff
+    if (run.cells && run.cells.length) {
+      const changed = run.cells.filter(c => c.changed_from_prev === true).length;
+      html += `<div class="card">
+        <div class="card-title">Cells (${run.cells.length}${changed ? `, ${changed} changed` : ''})</div>
+        <div class="card-body">`;
+      for (const cell of run.cells) {
+        const isCode = cell.cell_type === 'code';
+        let tag, tagClass;
+        if (cell.changed_from_prev === null) { tag = 'new'; tagClass = 'tag-first'; }
+        else if (cell.changed_from_prev === true) { tag = 'changed'; tagClass = 'tag-changed'; }
+        else { tag = 'same'; tagClass = 'tag-same'; }
+
+        const preview = (cell.source || '').split('\n')[0].slice(0, 60);
+        html += `<details class="cell-details" data-changed="${cell.changed_from_prev === true}">
+          <summary>
+            <span class="cell-arrow"></span>
+            <span style="color:var(--muted)">Cell ${cell.cell_index}</span>
+            <span style="color:var(--muted);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preview)}</span>
+            <span class="cell-tag ${tagClass}">${tag}</span>
+          </summary>
+          <div class="cell-inner">
+            <div class="cell-section-label">Source</div>
+            <pre class="cell-source">${esc(cell.source || '')}</pre>
+            ${cell.outputs && cell.outputs.length ? `
+            <div class="cell-section-label">Output</div>
+            <pre class="cell-output">${cell.outputs.map(esc).join('\n')}</pre>` : ''}
+          </div>
+        </details>`;
+      }
+      html += '</div></div>';
+    }
+
+    // Trajectory
+    if (run.trajectory_summary) {
+      html += `<div class="card">
+        <div class="card-title">Trajectory</div>
+        <div class="card-body"><p class="prose">${esc(run.trajectory_summary)}</p></div>
+      </div>`;
+    } else if (run.status === 'complete') {
+      html += `<div style="color:var(--muted);font-size:11px;padding:4px 0">
+        Trajectory summary available after 2+ runs for this problem.
+      </div>`;
+    }
+
+    document.getElementById('detail').innerHTML = html;
+  }
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
+
+  async function selectRun(runId) {
+    selectedRunId = runId;
+    renderSidebar(allRuns);
+    try {
+      const r = await fetch(`${API}/runs/${runId}`);
+      if (!r.ok) return;
+      renderDetail(await r.json());
+    } catch (e) {}
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch(`${API}/runs`);
+      if (!r.ok) return;
+      const runs = await r.json();
+
+      const changed = JSON.stringify(runs) !== JSON.stringify(allRuns.map(x => ({
+        run_id: x.run_id, status: x.status, accuracy: x.accuracy
+      })));
+
+      allRuns = runs;
+      renderSidebar(runs);
+      document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+      // If selected run changed status, refresh detail
+      if (selectedRunId && changed) {
+        const sel = runs.find(r => r.run_id === selectedRunId);
+        if (sel) {
+          try {
+            const dr = await fetch(`${API}/runs/${selectedRunId}`);
+            if (dr.ok) renderDetail(await dr.json());
+          } catch (e) {}
+        }
+      }
+
+      // Auto-select first run if nothing selected
+      if (!selectedRunId && runs.length) {
+        selectRun(runs[0].run_id);
+      }
+    } catch (e) {}
+  }
+
+  poll();
+  setInterval(poll, 3000);
+</script>
+</body>
+</html>
