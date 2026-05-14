@@ -834,6 +834,44 @@ window.addEventListener('DOMContentLoaded', function() {{
     return html
 
 
+def _parse_notebook_cells(nb_path: Path) -> list:
+    """Extract cell breakdown from solution.ipynb for dashboard display."""
+    try:
+        nb = json.loads(nb_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    result = []
+    for idx, cell in enumerate(nb.get("cells", [])):
+        cell_type = cell.get("cell_type", "code")
+        source = cell.get("source", [])
+        if isinstance(source, list):
+            source = "".join(source)
+        lines_split = source.split("\n")
+        # Derive a summary from the first meaningful line
+        summary = f"Cell {idx}"
+        for ln in lines_split:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                summary = s.lstrip("#").strip()[:100]
+            else:
+                summary = s[:100]
+            break
+        line_entries = [
+            {"line_index": li, "content": ln, "ai_summary": "", "changed": False, "change_reason": None}
+            for li, ln in enumerate(lines_split)
+            if ln.strip()
+        ]
+        result.append({
+            "cell_index": idx,
+            "cell_type": cell_type,
+            "cell_summary": summary,
+            "lines": line_entries,
+        })
+    return result
+
+
 def _regenerate(log_path: Path, dash_path: Path, logger: logging.Logger) -> None:
     try:
         raw = log_path.read_text(encoding="utf-8")
@@ -844,6 +882,15 @@ def _regenerate(log_path: Path, dash_path: Path, logger: logging.Logger) -> None
     except OSError as e:
         logger.error("Could not read %s: %s", log_path, e)
         return
+
+    # Auto-inject notebook cells for any prompt that has empty cells
+    nb_path = log_path.parent / "solution.ipynb"
+    if nb_path.exists():
+        nb_cells = _parse_notebook_cells(nb_path)
+        if nb_cells:
+            for p in data.get("prompts", []):
+                if not p.get("cells"):
+                    p["cells"] = nb_cells
 
     try:
         html = _generate_dashboard(data)
