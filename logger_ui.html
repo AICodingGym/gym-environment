@@ -17,7 +17,7 @@
     --red: #fa5252;
     --text: #e2e8f0;
     --muted: #8892a4;
-    --changed: rgba(250,176,5,0.12);
+    --changed: rgba(250,176,5,0.08);
   }
 
   body {
@@ -50,11 +50,7 @@
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
   .header-info { margin-left: auto; color: var(--muted); font-size: 11px; }
 
-  .layout {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
+  .layout { display: flex; flex: 1; overflow: hidden; }
 
   /* ── Sidebar ── */
   aside {
@@ -88,15 +84,8 @@
     transition: background .1s;
   }
   .run-item:hover { background: var(--surface2); }
-  .run-item.active {
-    background: var(--surface2);
-    border-left-color: var(--accent);
-  }
-  .status-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
+  .run-item.active { background: var(--surface2); border-left-color: var(--accent); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .s-complete { background: var(--green); }
   .s-running  { background: var(--yellow); animation: pulse 1s infinite; }
   .s-failed   { background: var(--red); }
@@ -112,14 +101,10 @@
     padding: 20px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
   }
 
-  .empty-state {
-    margin: auto;
-    text-align: center;
-    color: var(--muted);
-  }
+  .empty-state { margin: auto; text-align: center; color: var(--muted); }
   .empty-state p { margin-top: 8px; font-size: 12px; }
 
   .run-header {
@@ -128,16 +113,13 @@
     gap: 12px;
     flex-wrap: wrap;
   }
-  .run-id { font-size: 16px; font-weight: 700; color: var(--text); }
+  .run-id { font-size: 15px; font-weight: 700; color: var(--text); }
   .run-status-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 10px;
-    text-transform: uppercase;
-    letter-spacing: .5px;
+    font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 10px;
+    text-transform: uppercase; letter-spacing: .5px;
   }
-  .badge-complete { background: rgba(64,192,87,.15); color: var(--green); }
+  .badge-complete { background: rgba(64,192,87,.15);  color: var(--green); }
   .badge-running  { background: rgba(250,176,5,.15);  color: var(--yellow); }
   .badge-failed   { background: rgba(250,82,82,.15);  color: var(--red); }
   .badge-pending  { background: rgba(136,146,164,.15);color: var(--muted); }
@@ -151,28 +133,33 @@
   }
   .card-title {
     padding: 8px 12px;
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 11px; font-weight: 700;
     color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: .7px;
+    text-transform: uppercase; letter-spacing: .7px;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
   }
   .card-body { padding: 12px; }
 
-  /* Prompt */
-  details.prompt-details { }
+  /* Graph */
+  .graph-container { padding: 10px 12px 6px; }
+  .graph-no-data { padding: 16px 12px; color: var(--muted); font-size: 11px; }
+
+  /* Prompt dropdown */
   details.prompt-details summary {
     list-style: none;
     cursor: pointer;
     color: var(--muted);
     font-size: 11px;
     padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
   }
   details.prompt-details summary::-webkit-details-marker { display: none; }
-  details.prompt-details summary::before { content: '▶  '; font-size: 9px; }
-  details[open].prompt-details summary::before { content: '▼  '; }
+  details.prompt-details summary::before { content: '▶'; font-size: 9px; color: var(--accent); }
+  details[open].prompt-details summary::before { content: '▼'; }
   .prompt-text {
     padding: 10px 12px;
     color: var(--text);
@@ -180,19 +167,18 @@
     word-break: break-word;
     border-top: 1px solid var(--border);
     line-height: 1.6;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 12px;
   }
 
   /* Metrics */
-  .metrics-grid {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
+  .metrics-grid { display: flex; gap: 20px; flex-wrap: wrap; }
   .metric-item { display: flex; flex-direction: column; gap: 2px; }
   .metric-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
-  .metric-value { font-size: 20px; font-weight: 700; color: var(--text); }
+  .metric-value { font-size: 22px; font-weight: 700; color: var(--text); }
+  .metric-value.acc-good { color: var(--green); }
   .metric-value.null-val { font-size: 13px; color: var(--muted); }
-  .hyperparams { margin-top: 10px; }
+  .hyperparams { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
   .hyperparam-row { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; }
   .hyperparam-key { color: var(--muted); }
   .hyperparam-val { color: var(--text); }
@@ -210,7 +196,7 @@
     overflow-y: auto;
   }
 
-  /* Approach / Trajectory */
+  /* Prose */
   .prose {
     line-height: 1.7;
     color: var(--text);
@@ -218,15 +204,20 @@
     font-size: 13px;
   }
 
+  /* AI Summary card (approach) */
+  .ai-summary-card {
+    border-color: rgba(92,124,250,.3);
+  }
+  .ai-summary-card .card-title { color: var(--accent); }
+
   /* Cell diff */
-  .cell-count { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
   details.cell-details {
     border: 1px solid var(--border);
     border-radius: 4px;
     margin-bottom: 6px;
     overflow: hidden;
   }
-  details.cell-details[data-changed="true"] { border-color: rgba(250,176,5,.4); background: var(--changed); }
+  details.cell-details[data-changed="true"] { border-color: rgba(250,176,5,.35); background: var(--changed); }
   details.cell-details summary {
     list-style: none;
     cursor: pointer;
@@ -236,24 +227,50 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    user-select: none;
   }
   details.cell-details summary::-webkit-details-marker { display: none; }
-  .cell-arrow { font-size: 9px; }
+  .cell-arrow::before { content: '▶'; font-size: 9px; }
   details[open].cell-details .cell-arrow::before { content: '▼'; }
-  .cell-arrow::before { content: '▶'; }
   .cell-tag {
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 600;
+    padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; font-weight: 600;
   }
-  .tag-changed  { background: rgba(250,176,5,.2); color: var(--yellow); }
-  .tag-new      { background: rgba(92,124,250,.2); color: var(--accent); }
-  .tag-same     { background: rgba(136,146,164,.1); color: var(--muted); }
-  .tag-first    { background: rgba(64,192,87,.1); color: var(--green); }
+  .tag-changed { background: rgba(250,176,5,.2);   color: var(--yellow); }
+  .tag-new     { background: rgba(92,124,250,.2);  color: var(--accent); }
+  .tag-same    { background: rgba(136,146,164,.1); color: var(--muted); }
+  .tag-first   { background: rgba(64,192,87,.1);   color: var(--green); }
 
+  /* Per-cell AI summary inline chip in summary line */
+  .cell-ai-chip {
+    margin-left: auto;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    color: var(--accent);
+    opacity: 0.8;
+    flex-shrink: 1;
+  }
+
+  /* Cell inner: two-column layout */
   .cell-inner { padding: 0 10px 10px; }
-  .cell-section-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 8px 0 4px; }
+  .cell-body {
+    display: flex;
+    gap: 12px;
+    margin-top: 4px;
+  }
+  .cell-code-col { flex: 1; min-width: 0; }
+  .cell-ai-col {
+    width: 220px;
+    flex-shrink: 0;
+  }
+  .cell-section-label {
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .5px;
+    margin: 8px 0 4px;
+  }
   pre.cell-source, pre.cell-output {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -268,6 +285,18 @@
     max-height: 300px;
     overflow-y: auto;
   }
+  .cell-ai-box {
+    background: var(--bg);
+    border: 1px solid rgba(92,124,250,.25);
+    border-radius: 3px;
+    padding: 10px;
+    color: var(--accent);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 12px;
+    line-height: 1.55;
+    margin-top: 24px; /* align with source label+pre */
+  }
+  .cell-ai-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
 </style>
 </head>
 <body>
@@ -280,11 +309,10 @@
 
 <div class="layout">
   <aside id="sidebar">
-    <div class="empty-state" style="padding:20px;color:var(--muted);font-size:11px">
+    <div style="padding:20px;color:var(--muted);font-size:11px">
       No runs yet.<br>Save a solution.ipynb to start.
     </div>
   </aside>
-
   <main id="detail">
     <div class="empty-state">
       <div style="font-size:32px">⬡</div>
@@ -294,238 +322,318 @@
 </div>
 
 <script>
-  const API = '';
-  let allRuns = [];
-  let selectedRunId = null;
-  let pollTimer = null;
+const API = '';
+let allRuns = [];
+let selectedRunId = null;
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-  function fmtTime(iso) {
-    if (!iso) return '—';
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + fmtTime(iso);
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function statusClass(s) {
+  return { complete:'s-complete', running:'s-running', failed:'s-failed', pending:'s-pending' }[s] || 's-pending';
+}
+
+function badgeClass(s) {
+  return { complete:'badge-complete', running:'badge-running', failed:'badge-failed', pending:'badge-pending' }[s] || 'badge-pending';
+}
+
+// ── Accuracy graph (SVG) ──────────────────────────────────────────────────────
+
+function renderAccuracyGraph(problemRuns, currentRunId) {
+  const data = (problemRuns || [])
+    .filter(r => r.status === 'complete')
+    .map(r => {
+      const acc = (r.metrics && r.metrics.accuracy != null) ? r.metrics.accuracy : r.accuracy;
+      return acc != null ? { run_id: r.run_id, accuracy: acc, timestamp: r.timestamp || '' } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+  if (!data.length) {
+    return '<div class="graph-no-data">No accuracy data yet — run will appear once complete.</div>';
   }
 
-  function fmtDate(iso) {
-    if (!iso) return '—';
-    const d = new Date(iso);
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + fmtTime(iso);
+  const W = 560, H = 130;
+  const PAD = { t: 14, r: 16, b: 28, l: 54 };
+  const iW = W - PAD.l - PAD.r;
+  const iH = H - PAD.t - PAD.b;
+
+  const accs = data.map(d => d.accuracy);
+  let lo = Math.max(0, Math.min(...accs) - 0.005);
+  let hi = Math.min(1, Math.max(...accs) + 0.005);
+  if (hi - lo < 0.002) { lo = Math.max(0, lo - 0.005); hi = Math.min(1, hi + 0.005); }
+
+  const xOf = i => PAD.l + (data.length <= 1 ? iW / 2 : (i / (data.length - 1)) * iW);
+  const yOf = a => PAD.t + iH - ((a - lo) / (hi - lo)) * iH;
+
+  // Grid lines + Y labels
+  let grid = '';
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const a = lo + (hi - lo) * (i / ySteps);
+    const yy = yOf(a).toFixed(1);
+    grid += `<line x1="${PAD.l}" y1="${yy}" x2="${W - PAD.r}" y2="${yy}" stroke="#2e3347" stroke-width="1"/>`;
+    grid += `<text x="${PAD.l - 6}" y="${parseFloat(yy) + 3.5}" fill="#8892a4" font-size="9" text-anchor="end">${a.toFixed(3)}</text>`;
   }
 
-  function statusClass(status) {
-    return { complete: 's-complete', running: 's-running', failed: 's-failed', pending: 's-pending' }[status] || 's-pending';
+  // Polyline
+  const pts = data.map((d, i) => `${xOf(i).toFixed(1)},${yOf(d.accuracy).toFixed(1)}`).join(' ');
+
+  // Dots + X labels
+  let dots = '', xlabels = '';
+  data.forEach((d, i) => {
+    const cx = xOf(i).toFixed(1);
+    const cy = yOf(d.accuracy).toFixed(1);
+    const isCur = d.run_id === currentRunId;
+    const fill = isCur ? '#5c7cfa' : '#40c057';
+    const r = isCur ? 6 : 4;
+    dots += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="#0f1117" stroke-width="2"><title>${d.accuracy.toFixed(4)}</title></circle>`;
+    if (isCur) {
+      dots += `<text x="${cx}" y="${parseFloat(cy) - 10}" fill="#5c7cfa" font-size="9" text-anchor="middle">${d.accuracy.toFixed(4)}</text>`;
+    }
+    const t = new Date(d.timestamp);
+    const lbl = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    xlabels += `<text x="${cx}" y="${H - 4}" fill="#8892a4" font-size="9" text-anchor="middle">${esc(lbl)}</text>`;
+  });
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block">
+    ${grid}
+    <polyline points="${pts}" fill="none" stroke="#5c7cfa" stroke-width="1.5" opacity="0.7"/>
+    ${dots}
+    ${xlabels}
+  </svg>`;
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+
+function renderSidebar(runs) {
+  if (!runs.length) {
+    document.getElementById('sidebar').innerHTML =
+      '<div style="padding:20px;color:var(--muted);font-size:11px">No runs yet.<br>Save a solution.ipynb to start.</div>';
+    return;
   }
+  const byProblem = {};
+  for (const r of runs) (byProblem[r.problem] = byProblem[r.problem] || []).push(r);
 
-  function badgeClass(status) {
-    return { complete: 'badge-complete', running: 'badge-running', failed: 'badge-failed', pending: 'badge-pending' }[status] || 'badge-pending';
-  }
-
-  function esc(s) {
-    if (s == null) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  // ── Sidebar render ────────────────────────────────────────────────────────
-
-  function renderSidebar(runs) {
-    if (!runs.length) {
-      document.getElementById('sidebar').innerHTML =
-        '<div style="padding:20px;color:var(--muted);font-size:11px">No runs yet.<br>Save a solution.ipynb to start.</div>';
-      return;
-    }
-
-    const byProblem = {};
-    for (const r of runs) {
-      (byProblem[r.problem] = byProblem[r.problem] || []).push(r);
-    }
-
-    let html = '';
-    for (const [problem, pRuns] of Object.entries(byProblem)) {
-      html += `<div class="problem-group">
-        <div class="problem-label">${esc(problem)}</div>`;
-      for (const r of pRuns) {
-        const active = r.run_id === selectedRunId ? ' active' : '';
-        const acc = r.accuracy != null ? r.accuracy.toFixed(4) : '—';
-        html += `<div class="run-item${active}" data-run-id="${esc(r.run_id)}" onclick="selectRun('${esc(r.run_id)}')">
-          <div class="status-dot ${statusClass(r.status)}"></div>
-          <div class="run-meta">
-            <div class="run-acc">${acc}</div>
-            <div class="run-time">${fmtTime(r.timestamp)}</div>
-          </div>
-        </div>`;
-      }
-      html += '</div>';
-    }
-    document.getElementById('sidebar').innerHTML = html;
-  }
-
-  // ── Detail panel render ───────────────────────────────────────────────────
-
-  function renderDetail(run) {
-    if (!run) {
-      document.getElementById('detail').innerHTML =
-        '<div class="empty-state"><div style="font-size:32px">⬡</div><p>Select a run from the sidebar.</p></div>';
-      return;
-    }
-
-    let html = `
-      <div class="run-header">
-        <span class="run-id">${esc(run.run_id)}</span>
-        <span class="run-status-badge ${badgeClass(run.status)}">${esc(run.status)}</span>
-        <span style="color:var(--muted);font-size:11px">${fmtDate(run.timestamp)}</span>
-        ${run.duration_seconds != null ? `<span style="color:var(--muted);font-size:11px">${run.duration_seconds}s</span>` : ''}
-      </div>`;
-
-    // Error
-    if (run.notebook_error) {
-      html += `<div class="card">
-        <div class="card-title" style="color:var(--red)">Notebook Error</div>
-        <div class="card-body"><div class="error-box">${esc(run.notebook_error)}</div></div>
-      </div>`;
-    }
-
-    // Prompt
-    if (run.prompt != null) {
-      html += `<div class="card">
-        <div class="card-title">Prompt</div>
-        <details class="prompt-details">
-          <summary>Run ${esc(run.run_id)} — click to expand</summary>
-          <div class="prompt-text">${esc(run.prompt)}</div>
-        </details>
-      </div>`;
-    }
-
-    // Metrics
-    const m = run.metrics || {};
-    html += `<div class="card">
-      <div class="card-title">Metrics</div>
-      <div class="card-body">
-        <div class="metrics-grid">
-          <div class="metric-item">
-            <span class="metric-label">Accuracy</span>
-            ${m.accuracy != null
-              ? `<span class="metric-value">${m.accuracy.toFixed(4)}</span>`
-              : `<span class="metric-value null-val">—</span>`}
-          </div>
-          <div class="metric-item">
-            <span class="metric-label">Loss</span>
-            ${m.loss != null
-              ? `<span class="metric-value">${m.loss.toFixed(4)}</span>`
-              : `<span class="metric-value null-val">—</span>`}
-          </div>
+  let html = '';
+  for (const [problem, pRuns] of Object.entries(byProblem)) {
+    html += `<div class="problem-group"><div class="problem-label">${esc(problem)}</div>`;
+    for (const r of pRuns) {
+      const active = r.run_id === selectedRunId ? ' active' : '';
+      const acc = r.accuracy != null ? r.accuracy.toFixed(4) : '—';
+      html += `<div class="run-item${active}" onclick="selectRun('${esc(r.run_id)}')">
+        <div class="status-dot ${statusClass(r.status)}"></div>
+        <div class="run-meta">
+          <div class="run-acc">${acc}</div>
+          <div class="run-time">${fmtTime(r.timestamp)}</div>
         </div>
-        ${m.hyperparams && Object.keys(m.hyperparams).length ? `
-        <div class="hyperparams">
-          ${Object.entries(m.hyperparams).map(([k,v]) =>
-            `<div class="hyperparam-row"><span class="hyperparam-key">${esc(k)}</span><span class="hyperparam-val">${esc(String(v))}</span></div>`
-          ).join('')}
+      </div>`;
+    }
+    html += '</div>';
+  }
+  document.getElementById('sidebar').innerHTML = html;
+}
+
+// ── Detail render ─────────────────────────────────────────────────────────────
+
+function renderDetail(run, problemRuns) {
+  if (!run) {
+    document.getElementById('detail').innerHTML =
+      '<div class="empty-state"><div style="font-size:32px">⬡</div><p>Select a run from the sidebar.</p></div>';
+    return;
+  }
+
+  let html = '';
+
+  // 1. Run header
+  html += `<div class="run-header">
+    <span class="run-id">${esc(run.run_id)}</span>
+    <span class="run-status-badge ${badgeClass(run.status)}">${esc(run.status)}</span>
+    <span style="color:var(--muted);font-size:11px">${fmtDate(run.timestamp)}</span>
+    ${run.duration_seconds != null ? `<span style="color:var(--muted);font-size:11px">${run.duration_seconds}s</span>` : ''}
+  </div>`;
+
+  // 2. Error
+  if (run.notebook_error) {
+    html += `<div class="card">
+      <div class="card-title" style="color:var(--red)">Notebook Error</div>
+      <div class="card-body"><div class="error-box">${esc(run.notebook_error)}</div></div>
+    </div>`;
+  }
+
+  // 3. Accuracy trend graph
+  html += `<div class="card">
+    <div class="card-title">Accuracy Trend — ${esc(run.problem)}</div>
+    <div class="graph-container">${renderAccuracyGraph(problemRuns, run.run_id)}</div>
+  </div>`;
+
+  // 4. Prompt (collapsible dropdown #1)
+  if (run.prompt) {
+    html += `<div class="card">
+      <details class="prompt-details">
+        <summary>Prompt — click to expand</summary>
+        <div class="prompt-text">${esc(run.prompt)}</div>
+      </details>
+    </div>`;
+  }
+
+  // 5. Metrics
+  const m = run.metrics || {};
+  const acc = m.accuracy;
+  const accClass = acc != null ? (acc >= 0.95 ? 'acc-good' : '') : 'null-val';
+  html += `<div class="card">
+    <div class="card-title">Metrics</div>
+    <div class="card-body">
+      <div class="metrics-grid">
+        <div class="metric-item">
+          <span class="metric-label">Accuracy</span>
+          <span class="metric-value ${accClass}">${acc != null ? acc.toFixed(4) : '—'}</span>
+        </div>
+        ${m.loss != null ? `<div class="metric-item">
+          <span class="metric-label">Loss</span>
+          <span class="metric-value">${m.loss.toFixed(4)}</span>
         </div>` : ''}
       </div>
+      ${m.hyperparams && Object.keys(m.hyperparams).length ? `
+      <div class="hyperparams">
+        ${Object.entries(m.hyperparams).map(([k, v]) =>
+          `<div class="hyperparam-row"><span class="hyperparam-key">${esc(k)}</span><span class="hyperparam-val">${esc(String(v))}</span></div>`
+        ).join('')}
+      </div>` : ''}
+    </div>
+  </div>`;
+
+  // 6. AI Summary (approach)
+  if (run.approach_summary) {
+    html += `<div class="card ai-summary-card">
+      <div class="card-title">AI Summary</div>
+      <div class="card-body"><p class="prose">${esc(run.approach_summary)}</p></div>
     </div>`;
+  }
 
-    // Approach
-    if (run.approach_summary) {
-      html += `<div class="card">
-        <div class="card-title">Approach</div>
-        <div class="card-body"><p class="prose">${esc(run.approach_summary)}</p></div>
-      </div>`;
-    }
+  // 7. Cell Changes
+  if (run.cells && run.cells.length) {
+    const changed = run.cells.filter(c => c.changed_from_prev === true).length;
+    html += `<div class="card">
+      <div class="card-title">Cells (${run.cells.length}${changed ? `, ${changed} changed` : ''})</div>
+      <div class="card-body">`;
 
-    // Cell diff
-    if (run.cells && run.cells.length) {
-      const changed = run.cells.filter(c => c.changed_from_prev === true).length;
-      html += `<div class="card">
-        <div class="card-title">Cells (${run.cells.length}${changed ? `, ${changed} changed` : ''})</div>
-        <div class="card-body">`;
-      for (const cell of run.cells) {
-        const isCode = cell.cell_type === 'code';
-        let tag, tagClass;
-        if (cell.changed_from_prev === null) { tag = 'new'; tagClass = 'tag-first'; }
-        else if (cell.changed_from_prev === true) { tag = 'changed'; tagClass = 'tag-changed'; }
-        else { tag = 'same'; tagClass = 'tag-same'; }
+    for (const cell of run.cells) {
+      let tag, tagClass;
+      if (cell.changed_from_prev === null) { tag = 'first'; tagClass = 'tag-first'; }
+      else if (cell.changed_from_prev === true) { tag = 'changed'; tagClass = 'tag-changed'; }
+      else { tag = 'same'; tagClass = 'tag-same'; }
 
-        const preview = (cell.source || '').split('\n')[0].slice(0, 60);
-        html += `<details class="cell-details" data-changed="${cell.changed_from_prev === true}">
-          <summary>
-            <span class="cell-arrow"></span>
-            <span style="color:var(--muted)">Cell ${cell.cell_index}</span>
-            <span style="color:var(--muted);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(preview)}</span>
-            <span class="cell-tag ${tagClass}">${tag}</span>
-          </summary>
-          <div class="cell-inner">
-            <div class="cell-section-label">Source</div>
-            <pre class="cell-source">${esc(cell.source || '')}</pre>
-            ${cell.outputs && cell.outputs.length ? `
-            <div class="cell-section-label">Output</div>
-            <pre class="cell-output">${cell.outputs.map(esc).join('\n')}</pre>` : ''}
+      const preview = (cell.source || '').split('\n')[0].slice(0, 55);
+      const hasSummary = cell.cell_type === 'code' && cell.ai_summary;
+
+      html += `<details class="cell-details" data-changed="${cell.changed_from_prev === true}">
+        <summary>
+          <span class="cell-arrow"></span>
+          <span style="color:var(--muted)">Cell ${cell.cell_index}</span>
+          <span style="color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(preview)}</span>
+          <span class="cell-tag ${tagClass}">${tag}</span>
+          ${hasSummary ? `<span class="cell-ai-chip">${esc(cell.ai_summary)}</span>` : ''}
+        </summary>
+        <div class="cell-inner">
+          <div class="cell-body">
+            <div class="cell-code-col">
+              <div class="cell-section-label">Source</div>
+              <pre class="cell-source">${esc(cell.source || '')}</pre>
+              ${cell.outputs && cell.outputs.length ? `
+              <div class="cell-section-label">Output</div>
+              <pre class="cell-output">${cell.outputs.map(esc).join('\n')}</pre>` : ''}
+            </div>
+            ${hasSummary ? `<div class="cell-ai-col">
+              <div class="cell-ai-box">
+                <div class="cell-ai-label">AI Summary</div>
+                ${esc(cell.ai_summary)}
+              </div>
+            </div>` : ''}
           </div>
-        </details>`;
-      }
-      html += '</div></div>';
+        </div>
+      </details>`;
+    }
+    html += '</div></div>';
+  }
+
+  // 8. Trajectory
+  if (run.trajectory_summary) {
+    html += `<div class="card">
+      <div class="card-title">Trajectory</div>
+      <div class="card-body"><p class="prose">${esc(run.trajectory_summary)}</p></div>
+    </div>`;
+  } else if (run.status === 'complete') {
+    html += `<div style="color:var(--muted);font-size:11px;padding:2px 0">
+      Trajectory summary available after 2+ runs for this problem.
+    </div>`;
+  }
+
+  document.getElementById('detail').innerHTML = html;
+}
+
+// ── Data fetching ──────────────────────────────────────────────────────────────
+
+async function selectRun(runId) {
+  selectedRunId = runId;
+  renderSidebar(allRuns);
+
+  const summary = allRuns.find(r => r.run_id === runId);
+  const problem = summary && summary.problem;
+
+  try {
+    const fetches = [fetch(`${API}/runs/${encodeURIComponent(runId)}`)];
+    if (problem) fetches.push(fetch(`${API}/problems/${encodeURIComponent(problem)}/runs`));
+
+    const responses = await Promise.all(fetches);
+    if (!responses[0].ok) return;
+    const run = await responses[0].json();
+    const problemRuns = (responses[1] && responses[1].ok) ? await responses[1].json() : [];
+    renderDetail(run, problemRuns);
+  } catch (e) {}
+}
+
+async function poll() {
+  try {
+    const r = await fetch(`${API}/runs`);
+    if (!r.ok) return;
+    const runs = await r.json();
+
+    const prevSelected = allRuns.find(r => r.run_id === selectedRunId);
+    const curSelected  = runs.find(r => r.run_id === selectedRunId);
+    const statusChanged = curSelected && (!prevSelected || prevSelected.status !== curSelected.status);
+
+    allRuns = runs;
+    renderSidebar(runs);
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+    if (selectedRunId && statusChanged) {
+      selectRun(selectedRunId);
     }
 
-    // Trajectory
-    if (run.trajectory_summary) {
-      html += `<div class="card">
-        <div class="card-title">Trajectory</div>
-        <div class="card-body"><p class="prose">${esc(run.trajectory_summary)}</p></div>
-      </div>`;
-    } else if (run.status === 'complete') {
-      html += `<div style="color:var(--muted);font-size:11px;padding:4px 0">
-        Trajectory summary available after 2+ runs for this problem.
-      </div>`;
+    if (!selectedRunId && runs.length) {
+      selectRun(runs[0].run_id);
     }
+  } catch (e) {}
+}
 
-    document.getElementById('detail').innerHTML = html;
-  }
-
-  // ── Data fetching ─────────────────────────────────────────────────────────
-
-  async function selectRun(runId) {
-    selectedRunId = runId;
-    renderSidebar(allRuns);
-    try {
-      const r = await fetch(`${API}/runs/${runId}`);
-      if (!r.ok) return;
-      renderDetail(await r.json());
-    } catch (e) {}
-  }
-
-  async function poll() {
-    try {
-      const r = await fetch(`${API}/runs`);
-      if (!r.ok) return;
-      const runs = await r.json();
-
-      const changed = JSON.stringify(runs) !== JSON.stringify(allRuns.map(x => ({
-        run_id: x.run_id, status: x.status, accuracy: x.accuracy
-      })));
-
-      allRuns = runs;
-      renderSidebar(runs);
-      document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-      // If selected run changed status, refresh detail
-      if (selectedRunId && changed) {
-        const sel = runs.find(r => r.run_id === selectedRunId);
-        if (sel) {
-          try {
-            const dr = await fetch(`${API}/runs/${selectedRunId}`);
-            if (dr.ok) renderDetail(await dr.json());
-          } catch (e) {}
-        }
-      }
-
-      // Auto-select first run if nothing selected
-      if (!selectedRunId && runs.length) {
-        selectRun(runs[0].run_id);
-      }
-    } catch (e) {}
-  }
-
-  poll();
-  setInterval(poll, 3000);
+poll();
+setInterval(poll, 3000);
 </script>
 </body>
 </html>

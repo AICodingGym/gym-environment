@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -41,9 +42,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("logger_daemon")
 
+MODEL = "claude-sonnet-4-6"
+
 
 # ---------------------------------------------------------------------------
-# RunStore — atomic JSON reads/writes per run
+# RunStore
 # ---------------------------------------------------------------------------
 
 class RunStore:
@@ -81,13 +84,13 @@ class RunStore:
             key=lambda r: r.get("timestamp", ""),
         )
 
-    def latest_completed_for_problem(self, problem: str) -> dict | None:
-        completed = [r for r in self.runs_for_problem(problem) if r.get("status") == "complete"]
-        return completed[-1] if completed else None
+    def latest_completed(self, problem: str) -> dict | None:
+        done = [r for r in self.runs_for_problem(problem) if r.get("status") == "complete"]
+        return done[-1] if done else None
 
 
 # ---------------------------------------------------------------------------
-# NotebookRunner — execute and parse notebooks
+# NotebookRunner
 # ---------------------------------------------------------------------------
 
 class NotebookRunner:
@@ -103,17 +106,10 @@ class NotebookRunner:
 
     def execute(self, nb_path: Path) -> tuple[bool, str]:
         result = subprocess.run(
-            [
-                sys.executable, "-m", "jupyter", "nbconvert",
-                "--to", "notebook",
-                "--execute",
-                "--inplace",
-                f"--ExecutePreprocessor.timeout={self.timeout}",
-                str(nb_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=self.timeout + 30,
+            [sys.executable, "-m", "jupyter", "nbconvert",
+             "--to", "notebook", "--execute", "--inplace",
+             f"--ExecutePreprocessor.timeout={self.timeout}", str(nb_path)],
+            capture_output=True, text=True, timeout=self.timeout + 30,
         )
         if result.returncode != 0:
             return False, (result.stderr or result.stdout)[:4000]
@@ -130,9 +126,8 @@ class NotebookRunner:
                     outputs.append("".join(out.get("text", [])))
                 elif otype in ("execute_result", "display_data"):
                     data = out.get("data", {})
-                    if "text/plain" in data:
-                        text = data["text/plain"]
-                        outputs.append("".join(text) if isinstance(text, list) else text)
+                    text = data.get("text/plain", "")
+                    outputs.append("".join(text) if isinstance(text, list) else text)
                 elif otype == "error":
                     outputs.append(f"{out.get('ename')}: {out.get('evalue')}")
             cells.append({
@@ -141,17 +136,18 @@ class NotebookRunner:
                 "source": cell.source,
                 "outputs": outputs,
                 "changed_from_prev": None,
+                "ai_summary": None,
             })
         return cells
 
 
 # ---------------------------------------------------------------------------
-# Diff helper
+# Diff
 # ---------------------------------------------------------------------------
 
 def diff_cells(current: list[dict], previous: list[dict] | None) -> list[dict]:
     if previous is None:
-        return current  # first run: all cells have changed_from_prev=None
+        return current
     prev_map = {c["cell_index"]: c for c in previous}
     for cell in current:
         prev = prev_map.get(cell["cell_index"])
@@ -166,70 +162,79 @@ def diff_cells(current: list[dict], previous: list[dict] | None) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# AIExtractor — Claude calls for metrics, approach, trajectory
+# AIExtractor
 # ---------------------------------------------------------------------------
 
 class AIExtractor:
-    MODEL = "claude-sonnet-4-20250514"
-
     def __init__(self):
         self.client = Anthropic()
 
     def extract_metrics(self, cells: list[dict]) -> dict:
-        outputs_text = "\n".join(
+        outputs = "\n".join(
             f"[Cell {c['cell_index']}]\n" + "\n".join(c["outputs"])
-            for c in cells
-            if c.get("outputs")
+            for c in cells if c.get("outputs")
         )
-        if not outputs_text.strip():
+        if not outputs.strip():
             return {"accuracy": None, "loss": None, "hyperparams": None}
         try:
             resp = self.client.messages.create(
-                model=self.MODEL,
-                max_tokens=512,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Extract ML metrics from this notebook output. "
-                        "Return ONLY a valid JSON object with keys: "
-                        "accuracy (float or null), loss (float or null), hyperparams (object or null). "
-                        "No markdown, no explanation — just the JSON.\n\n"
-                        + outputs_text[:8000]
-                    ),
-                }],
+                model=MODEL, max_tokens=512,
+                messages=[{"role": "user", "content": (
+                    "Extract ML metrics from this notebook output. "
+                    "Return ONLY a valid JSON object with keys: "
+                    "accuracy (float or null), loss (float or null), hyperparams (object or null). "
+                    "No markdown, no explanation.\n\n" + outputs[:8000]
+                )}],
             )
-            raw = resp.content[0].text.strip()
-            # Strip markdown fences if Claude adds them
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            raw = resp.content[0].text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             return json.loads(raw)
         except Exception as e:
             log.warning("Metrics extraction failed: %s", e)
             return {"accuracy": None, "loss": None, "hyperparams": None}
 
+    def summarize_cells(self, cells: list[dict]) -> list[dict]:
+        """Return cells with ai_summary filled in for code cells."""
+        code_cells = [c for c in cells if c["cell_type"] == "code" and c["source"].strip()]
+        if not code_cells:
+            return cells
+        snippets = "\n\n".join(
+            f"Cell {c['cell_index']}:\n{c['source'][:400]}"
+            for c in code_cells[:15]
+        )
+        try:
+            resp = self.client.messages.create(
+                model=MODEL, max_tokens=1024,
+                messages=[{"role": "user", "content": (
+                    "For each cell below, write ONE short sentence (max 12 words) describing what it does. "
+                    "Format strictly as: Cell N: <sentence>\n\n" + snippets
+                )}],
+            )
+            summaries: dict[int, str] = {}
+            for line in resp.content[0].text.splitlines():
+                m = re.match(r"Cell\s+(\d+):\s*(.+)", line.strip())
+                if m:
+                    summaries[int(m.group(1))] = m.group(2).strip()
+            for cell in cells:
+                if cell["cell_type"] == "code":
+                    cell["ai_summary"] = summaries.get(cell["cell_index"])
+        except Exception as e:
+            log.warning("Cell summaries failed: %s", e)
+        return cells
+
     def summarize_approach(self, cells: list[dict]) -> str:
         source = "\n\n".join(
             f"# Cell {c['cell_index']}\n{c['source']}"
-            for c in cells
-            if c["cell_type"] == "code" and c["source"].strip()
+            for c in cells if c["cell_type"] == "code" and c["source"].strip()
         )
         if not source.strip():
             return ""
         try:
             resp = self.client.messages.create(
-                model=self.MODEL,
-                max_tokens=512,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Describe the ML approach in this notebook in one paragraph. "
-                        "Cover: model architecture, preprocessing, feature choices, evaluation. "
-                        "Be specific — name the actual algorithms and transformations used.\n\n"
-                        + source[:8000]
-                    ),
-                }],
+                model=MODEL, max_tokens=400,
+                messages=[{"role": "user", "content": (
+                    "Describe the ML approach in this notebook in one paragraph (3-4 sentences). "
+                    "Cover model, preprocessing, evaluation. Be specific.\n\n" + source[:6000]
+                )}],
             )
             return resp.content[0].text.strip()
         except Exception as e:
@@ -241,45 +246,38 @@ class AIExtractor:
             return None
         lines = []
         for r in runs:
-            acc = r.get("metrics", {}).get("accuracy")
-            approach = (r.get("approach_summary") or "")[:200]
+            acc = (r.get("metrics") or {}).get("accuracy")
+            approach = (r.get("approach_summary") or "")[:150]
             lines.append(f"Run {r['run_id']} | accuracy={acc} | {approach}")
         try:
             resp = self.client.messages.create(
-                model=self.MODEL,
-                max_tokens=512,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Explain the accuracy trend across these ML runs in one paragraph. "
-                        "What changed between runs, what helped, what didn't, and why the current result looks the way it does.\n\n"
-                        + "\n".join(lines)
-                    ),
-                }],
+                model=MODEL, max_tokens=400,
+                messages=[{"role": "user", "content": (
+                    "Explain the accuracy trend across these ML runs in one paragraph. "
+                    "What changed between runs, what helped, what didn't.\n\n" + "\n".join(lines)
+                )}],
             )
             return resp.content[0].text.strip()
         except Exception as e:
-            log.warning("Trajectory summary failed: %s", e)
+            log.warning("Trajectory failed: %s", e)
             return None
 
 
 # ---------------------------------------------------------------------------
-# RunWorker — sequential queue processor
+# RunWorker
 # ---------------------------------------------------------------------------
 
 class RunWorker(threading.Thread):
-    def __init__(
-        self,
-        work_queue: queue.Queue,
-        store: RunStore,
-        ai: AIExtractor,
-        runner: NotebookRunner,
-    ):
+    def __init__(self, work_queue: queue.Queue, store: RunStore,
+                 ai: AIExtractor, runner: NotebookRunner, watch_root: Path):
         super().__init__(daemon=True, name="RunWorker")
         self.queue = work_queue
         self.store = store
         self.ai = ai
         self.runner = runner
+        self.watch_root = watch_root
+        self._in_flight: set[str] = set()  # problems currently being processed
+        self._lock = threading.Lock()
 
     def run(self):
         while True:
@@ -287,17 +285,32 @@ class RunWorker(threading.Thread):
             try:
                 self._process(item)
             except Exception as e:
-                log.error("Run processing error: %s", e, exc_info=True)
+                log.error("Run error: %s", e, exc_info=True)
             finally:
                 self.queue.task_done()
 
     def _process(self, item: dict):
         problem = item["problem"]
+
+        # Skip if this problem already has a run in flight
+        with self._lock:
+            if problem in self._in_flight:
+                log.info("Skip %s — run already in flight", problem)
+                return
+            self._in_flight.add(problem)
+
+        try:
+            self._do_process(item)
+        finally:
+            with self._lock:
+                self._in_flight.discard(problem)
+
+    def _do_process(self, item: dict):
+        problem = item["problem"]
         problem_path = Path(item["problem_path"])
         nb_path = Path(item["nb_path"])
 
         if not nb_path.exists():
-            log.warning("Notebook gone before processing: %s", nb_path)
             return
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -326,7 +339,7 @@ class RunWorker(threading.Thread):
 
         self.store.save(run)
 
-        # Step 1: Execute if no outputs
+        # 1. Execute if needed
         if self.runner.needs_execution(nb_path):
             log.info("[%s] Executing notebook...", run_id)
             ok, err = self.runner.execute(nb_path)
@@ -336,62 +349,83 @@ class RunWorker(threading.Thread):
                 run["status"] = "failed"
                 run["duration_seconds"] = round(time.time() - t0, 1)
                 self.store.save(run)
-                log.error("[%s] Execution failed:\n%s", run_id, err[:500])
+                log.error("[%s] Execution failed", run_id)
                 return
-            log.info("[%s] Execution succeeded.", run_id)
+            log.info("[%s] Execution done.", run_id)
         else:
             log.info("[%s] Notebook already has outputs.", run_id)
 
-        # Step 2: Parse cells
+        # 2. Parse + diff cells
         cells = self.runner.parse_cells(nb_path)
-
-        # Step 3: Diff against previous completed run
-        prev = self.store.latest_completed_for_problem(problem)
-        prev_cells = prev.get("cells") if prev else None
-        cells = diff_cells(cells, prev_cells)
+        prev = self.store.latest_completed(problem)
+        cells = diff_cells(cells, prev.get("cells") if prev else None)
         run["cells"] = cells
         self.store.save(run)
 
-        # Step 4: Extract metrics
+        # 3. AI: per-cell summaries (batched)
+        log.info("[%s] Generating cell summaries...", run_id)
+        run["cells"] = self.ai.summarize_cells(cells)
+        self.store.save(run)
+
+        # 4. AI: metrics
         log.info("[%s] Extracting metrics...", run_id)
         run["metrics"] = self.ai.extract_metrics(cells)
         self.store.save(run)
 
-        # Step 5: Approach summary
-        log.info("[%s] Summarizing approach...", run_id)
+        # 5. AI: approach
+        log.info("[%s] Approach summary...", run_id)
         run["approach_summary"] = self.ai.summarize_approach(cells)
         self.store.save(run)
 
-        # Step 6: Trajectory (≥2 prior runs)
+        # 6. AI: trajectory
         prior = self.store.runs_for_problem(problem)
         if prior:
-            log.info("[%s] Summarizing trajectory (%d prior runs)...", run_id, len(prior))
+            log.info("[%s] Trajectory summary...", run_id)
             run["trajectory_summary"] = self.ai.summarize_trajectory(prior + [run])
-        self.store.save(run)
 
         run["status"] = "complete"
         run["duration_seconds"] = round(time.time() - t0, 1)
         self.store.save(run)
-        log.info(
-            "[%s] Complete. accuracy=%s duration=%.1fs",
-            run_id,
-            run["metrics"].get("accuracy"),
-            run["duration_seconds"],
-        )
+        log.info("[%s] Done. accuracy=%s duration=%.1fs",
+                 run_id, (run["metrics"] or {}).get("accuracy"), run["duration_seconds"])
+
+        # 7. Auto-log to aicodinggym experiment log
+        self._auto_log(run, problem_path)
+
+    def _auto_log(self, run: dict, problem_path: Path):
+        accuracy = (run.get("metrics") or {}).get("accuracy")
+        if accuracy is None:
+            return
+        problem = run["problem"]
+        approach = (run.get("approach_summary") or "")[:120].replace('"', "'")
+        try:
+            subprocess.run(
+                ["aicodinggym", "mle", "log", "add", problem,
+                 "--no-input",
+                 "-s", approach or f"run {run['run_id'][-6:]}",
+                 "--author", "ai",
+                 "--val-metric", "accuracy",
+                 "--val-score", str(accuracy)],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(problem_path.parent),
+            )
+            log.info("[%s] Logged to mle experiment log (accuracy=%.4f)", run["run_id"], accuracy)
+        except Exception as e:
+            log.warning("mle log add failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
-# Filesystem watcher
+# Watcher
 # ---------------------------------------------------------------------------
 
 class NotebookEventHandler(FileSystemEventHandler):
-    DEBOUNCE_SECS = 5
+    DEBOUNCE_SECS = 10  # longer debounce — notebooks trigger multiple FS events during execution
 
     def __init__(self, watch_root: Path, work_queue: queue.Queue):
         self.watch_root = watch_root
         self.queue = work_queue
-        self._last_enqueued: dict[str, float] = {}
-        self._lock = threading.Lock()
+        self._last: dict[str, float] = {}
+        self._lck = threading.Lock()
 
     def _enqueue(self, src: str):
         nb_path = Path(src)
@@ -399,19 +433,19 @@ class NotebookEventHandler(FileSystemEventHandler):
             return
         problem_path = nb_path.parent
         try:
-            relative = problem_path.relative_to(self.watch_root)
+            rel = problem_path.relative_to(self.watch_root)
         except ValueError:
             return
-        if len(relative.parts) != 1:
-            return  # only direct children of watch root
+        if len(rel.parts) != 1:
+            return
 
-        with self._lock:
+        with self._lck:
             now = time.time()
-            if now - self._last_enqueued.get(src, 0) < self.DEBOUNCE_SECS:
+            if now - self._last.get(src, 0) < self.DEBOUNCE_SECS:
                 return
-            self._last_enqueued[src] = now
+            self._last[src] = now
 
-        log.info("Queuing run for: %s", problem_path.name)
+        log.info("Queuing: %s", problem_path.name)
         self.queue.put({
             "problem": problem_path.name,
             "problem_path": str(problem_path),
@@ -428,7 +462,7 @@ class NotebookEventHandler(FileSystemEventHandler):
 
 
 # ---------------------------------------------------------------------------
-# FastAPI app
+# FastAPI
 # ---------------------------------------------------------------------------
 
 def make_app(store: RunStore, ui_path: Path) -> FastAPI:
@@ -455,16 +489,12 @@ def make_app(store: RunStore, ui_path: Path) -> FastAPI:
     def get_run(run_id: str):
         run = store.load(run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
+            raise HTTPException(404, "Run not found")
         return run
 
-    @app.get("/problems/{name}/trajectory")
-    def get_trajectory(name: str):
-        runs = store.runs_for_problem(name)
-        if not runs:
-            return {"trajectory_summary": None}
-        latest = runs[-1]
-        return {"trajectory_summary": latest.get("trajectory_summary")}
+    @app.get("/problems/{name}/runs")
+    def problem_runs(name: str):
+        return store.runs_for_problem(name)
 
     @app.get("/health")
     def health():
@@ -479,11 +509,9 @@ def make_app(store: RunStore, ui_path: Path) -> FastAPI:
 
 def main():
     parser = argparse.ArgumentParser(description="MLE-bench logger daemon")
-    parser.add_argument("--watch", required=True, metavar="DIR",
-                        help="Parent directory to watch for problem folders")
+    parser.add_argument("--watch", required=True, metavar="DIR")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--runs-dir", default=None, metavar="DIR",
-                        help="Where to store run JSON files (default: <watch>/.logger_runs)")
+    parser.add_argument("--runs-dir", default=None, metavar="DIR")
     args = parser.parse_args()
 
     watch_root = Path(args.watch).resolve()
@@ -493,14 +521,14 @@ def main():
     if not watch_root.is_dir():
         sys.exit(f"Error: --watch path does not exist: {watch_root}")
     if not ui_path.exists():
-        sys.exit(f"Error: logger_ui.html not found next to logger_daemon.py")
+        sys.exit("Error: logger_ui.html not found next to logger_daemon.py")
 
     store = RunStore(runs_dir)
     ai = AIExtractor()
     runner = NotebookRunner()
     work_queue: queue.Queue = queue.Queue()
 
-    worker = RunWorker(work_queue, store, ai, runner)
+    worker = RunWorker(work_queue, store, ai, runner, watch_root)
     worker.start()
 
     handler = NotebookEventHandler(watch_root, work_queue)
