@@ -1,5 +1,1 @@
 watchdog>=4.0
-fastapi>=0.110
-uvicorn>=0.27
-nbformat>=5.9
-anthropic>=0.25

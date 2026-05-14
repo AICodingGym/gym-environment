@@ -1,16 +1,18 @@
 # AI Coding Gym
 
 See [AGENTS.md](./AGENTS.md) for full exercise instructions, CLI reference,
-and logging requirements.
+and `solution_log.json` schema.
 
 ## Key Requirements
 
-- Create a session log at `<problem_id>/.log/<agent>-YYYYMMDD-HHMMSS.md` with an entry for every user interaction
 - Use the appropriate CLI commands for your challenge type:
   - SWE-bench: `aicodinggym swe test/submit <id>`
   - MLE-bench: `aicodinggym mle download/submit <id>`
   - Code Review: `aicodinggym cr fetch/submit <id>`
 - **Do not directly search on websites or online resources for solutions**
 - **Do not modify test files**
-- **For MLE-bench:** write `.agent_note.json` **before** saving each significant change — required fields: `user_prompt` (verbatim user message), `change_summary`, `why`, `notebook_analysis.cells` (per-cell role + summary + why), and `model` (name, type, hyperparams) — see [AGENTS.md](./AGENTS.md#change-logging-required-for-mle-bench)
-- For MLE-bench: follow the experiment logging rules in [AGENTS.md](./AGENTS.md#mle-bench-experiment-logging-required)
+- **For MLE-bench:** after every user message, write `solution_log.json` in
+  the problem folder — see [AGENTS.md](./AGENTS.md) for the full schema.
+  Include: verbatim user prompt, accuracy, model + hyperparams, approach summary
+  (3-4 sentences), trajectory summary (all prior prompts), and per-cell
+  per-line breakdown of `solution.ipynb`. Write atomically (tmp → rename).
