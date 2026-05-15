@@ -92,9 +92,11 @@ Add one entry to the `prompts` array. Write atomically (write to
 
 | Field | Rules |
 |-------|-------|
-| `accuracy` | Float 0–1, or `null` if not yet evaluated. For SWE/CR: `null` (no regression metric). |
-| `model` | Object or `null`. MLE-bench only; SWE/CR agents may omit. |
-| `cells` | Required for MLE-bench where `solution.ipynb` exists. SWE/CR: omit or `[]`. |
+| `accuracy` | **Must be a real measured float 0–1 after the notebook has run. Never `null` once predictions exist.** Evaluate on a training holdout or cross-validation score — do not skip this step. `null` only acceptable before first execution. For SWE/CR: `null` (no regression metric). |
+| `model` | **Must be non-null for MLE-bench.** Name the strategy even when there is no ML model (e.g. `"MajorityLookup"`, `"RuleBasedNum2words"`). Record all key hyperparameters. |
+| `cells` | **Required for MLE-bench where `solution.ipynb` exists — never an empty array.** One entry per code cell. `lines` must list every non-blank source line with `content` (exact source text) and `ai_summary` (why the line exists). Markdown cells may have `lines: []`. |
+| `lines[].content` | Exact source text of the line. Copy verbatim from the notebook cell. |
+| `lines[].ai_summary` | One short phrase explaining why this line exists. Required when `cells` is present. |
 | `changed` | If `true`, `change_reason` must be non-null explaining **why** the line changed AND **how** it improves accuracy. |
 | `trajectory_summary` | Covers ALL previous prompt entries — not just the prior one. Empty string OK on prompt 1. |
 | `prompt_index` | 1-based, incrementing integer. |
