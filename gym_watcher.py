@@ -921,12 +921,19 @@ class _Handler(FileSystemEventHandler):
     def on_created(self, event):
         self._check(event)
 
+    def on_moved(self, event):
+        # Atomic write: tmp → solution_log.json fires a moved/renamed event on Windows
+        if not event.is_directory and Path(event.dest_path).name == SOLUTION_LOG:
+            self._fire()
+
     def _check(self, event):
         if event.is_directory:
             return
-        p = Path(event.src_path)
-        if p.name != SOLUTION_LOG:
+        if Path(event.src_path).name != SOLUTION_LOG:
             return
+        self._fire()
+
+    def _fire(self):
         now = time.time()
         if now - self._last_fire < DEBOUNCE_SECONDS:
             return
