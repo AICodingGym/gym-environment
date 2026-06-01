@@ -11,6 +11,9 @@ and `solution_log.json` schema.
   - Code Review: `aicodinggym cr fetch/submit <id>`
 - **Do not directly search on websites or online resources for solutions**
 - **Do not modify test files**
+- **Before any `submit`:** write `.gym_attribution.json` in the problem folder
+  with your `tool`, `ai_model`, and (if known) `tool_version` so the leaderboard
+  credits the right tool/model. See [AGENTS.md](./AGENTS.md) for the schema.
 - **For MLE-bench:** after every user message, write `solution_log.json` in
   the problem folder — see [AGENTS.md](./AGENTS.md) for the full schema.
   Write atomically (tmp → rename).

@@ -119,6 +119,42 @@ prompts. Omit the `cells` and `model` fields; set `accuracy` to `null`.
 
 ---
 
+## Tool / Model Attribution — Required (All Challenge Types)
+
+So the leaderboard can credit the right tool and model, **write a file named
+`.gym_attribution.json` in the problem folder before you run any `submit`
+command.** You know your own identity; the CLI cannot reliably detect every
+tool, so you must self-report.
+
+> **Submission is rejected if tool + model cannot be resolved.** If you skip
+> this file and the CLI cannot auto-detect your tool/model, `submit` exits with
+> an error and prints the exact file + command to fix it. Write the file first
+> to avoid the round-trip.
+
+```json
+{
+  "tool": "claude-code",
+  "tool_version": "2.1.141",
+  "ai_model": "claude-opus-4-7"
+}
+```
+
+Field rules:
+
+- `tool` — your coding tool's name (e.g. `claude-code`, `cursor`, `aider`,
+  `codex-cli`, `gemini-cli`, `windsurf`, `cline`, `continue`, or your tool's
+  real name if not listed). Required.
+- `ai_model` — the underlying model id you are running (e.g. `claude-opus-4-7`,
+  `gpt-5`, `gemini-2.5-pro`). Required.
+- `tool_version` — version string if you know it. Optional.
+
+Write it once per challenge (update it if you switch models mid-session). The
+CLI reads this file automatically on `swe submit`, `mle submit`, and
+`cr submit` — no flags needed. Explicit `--tool` / `--ai-model` flags and a
+detected live session still take precedence if present.
+
+---
+
 ## Challenge Type 1: SWE-bench (Bug Fix)
 
 Real bugs from open-source projects. Your goal is to identify and fix the bug
