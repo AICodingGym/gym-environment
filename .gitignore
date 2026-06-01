@@ -1,0 +1,14 @@
+﻿# Supervisor runtime artifacts (created if the supervisor is ever run from this dir)
+.supervisor.log
+.supervisor.lock
+.supervisor_snapshot/
+
+# Problem-local session logs (session_log writes here when a dir is treated as a workspace)
+.log/
+.mle_log.jsonl
+gym_log.json
+
+# Python/editor cruft
+__pycache__/
+*.pyc
+.DS_Store

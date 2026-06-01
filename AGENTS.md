@@ -11,6 +11,150 @@ Check which type you are working on and follow the corresponding workflow below.
 
 ---
 
+## Gym Watcher (Auto-starts on Every Problem)
+
+Each fetched/downloaded challenge folder is seeded with:
+
+- `gym_watcher.py` — Python watchdog that monitors `solution_log.json` and
+  regenerates `dashboard.html` whenever the file changes
+- `solution_log.json` — written by **you** (the AI agent) after each user message
+- `dashboard.html` — generated automatically from `solution_log.json`
+
+**Auto-start:** `aicodinggym swe fetch`, `aicodinggym mle download`, and
+`aicodinggym cr fetch` each launch `gym_watcher.py` in the background, which
+opens `dashboard.html` in the browser. The watcher logs to `.gym_watcher.log`.
+
+To start it manually:
+```bash
+python gym_watcher.py <problem_dir>
+```
+
+---
+
+## `solution_log.json` — Required for MLE-bench
+
+After **every user message**, update `solution_log.json` in the problem folder.
+Add one entry to the `prompts` array. Write atomically (write to
+`solution_log.json.tmp` then rename) to avoid partial reads.
+
+### Full Schema
+
+```json
+{
+  "version": "1.0",
+  "problem": "spaceship-titanic",
+  "problem_type": "mle",
+  "prompts": [
+    {
+      "prompt_index": 1,
+      "user_prompt": "exact verbatim user message",
+      "timestamp": "2026-05-14T10:23:00Z",
+      "accuracy": 0.923,
+      "model": {
+        "name": "XGBoostClassifier",
+        "hyperparams": {
+          "n_estimators": 100,
+          "max_depth": 6,
+          "learning_rate": 0.1
+        }
+      },
+      "approach_summary": "3-4 sentence overview of the technique used in this prompt",
+      "trajectory_summary": "cumulative analysis of ALL prior prompts showing how accuracy improved",
+      "cells": [
+        {
+          "cell_index": 0,
+          "cell_type": "code",
+          "cell_summary": "one-line summary of what this cell does",
+          "lines": [
+            {
+              "line_index": 0,
+              "content": "import pandas as pd",
+              "ai_summary": "why this line exists",
+              "changed": false,
+              "change_reason": null
+            },
+            {
+              "line_index": 5,
+              "content": "X_train, X_val = train_test_split(X, test_size=0.2)",
+              "ai_summary": "creates holdout set for accuracy estimation",
+              "changed": true,
+              "change_reason": "switched from 0.1 to 0.2 split to reduce variance in accuracy estimate, improving leaderboard generalization"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Field Rules
+
+| Field | Rules |
+|-------|-------|
+| `accuracy` | **Must be a real measured float 0–1 after the notebook has run. Never `null` once predictions exist.** Evaluate on a training holdout or cross-validation score — do not skip this step. `null` only acceptable before first execution. For SWE/CR: `null` (no regression metric). |
+| `model` | **Must be non-null for MLE-bench.** Name the strategy even when there is no ML model (e.g. `"MajorityLookup"`, `"RuleBasedNum2words"`). Record all key hyperparameters. |
+| `cells` | **Required for MLE-bench where `solution.ipynb` exists — never an empty array.** One entry per code cell. `lines` must list every non-blank source line with `content` (exact source text) and `ai_summary` (why the line exists). Markdown cells may have `lines: []`. |
+| `lines[].content` | Exact source text of the line. Copy verbatim from the notebook cell. |
+| `lines[].ai_summary` | One short phrase explaining why this line exists. Required when `cells` is present. |
+| `changed` | If `true`, `change_reason` must be non-null explaining **why** the line changed AND **how** it improves accuracy. |
+| `trajectory_summary` | Covers ALL previous prompt entries — not just the prior one. Empty string OK on prompt 1. |
+| `prompt_index` | 1-based, incrementing integer. |
+
+### What the Dashboard Shows
+
+The watcher regenerates `dashboard.html` on each write:
+- **Accuracy line chart** — one point per prompt, clickable
+- **Click a point** → shows model name + hyperparameters for that prompt
+- **Approach summary** — 3-4 sentence overview of techniques
+- **Trajectory summary** — cumulative analysis of progression
+- **Cell breakdown** — expandable cells with per-line AI summaries;
+  changed lines are highlighted with amber background and `change_reason`
+
+### SWE-bench and Code Review
+
+`solution_log.json` is optional for SWE-bench and Code Review (no notebook /
+accuracy metric), but you may still write it to track your approach over multiple
+prompts. Omit the `cells` and `model` fields; set `accuracy` to `null`.
+
+---
+
+## Tool / Model Attribution — Required (All Challenge Types)
+
+So the leaderboard can credit the right tool and model, **write a file named
+`.gym_attribution.json` in the problem folder before you run any `submit`
+command.** You know your own identity; the CLI cannot reliably detect every
+tool, so you must self-report.
+
+> **Submission is rejected if tool + model cannot be resolved.** If you skip
+> this file and the CLI cannot auto-detect your tool/model, `submit` exits with
+> an error and prints the exact file + command to fix it. Write the file first
+> to avoid the round-trip.
+
+```json
+{
+  "tool": "claude-code",
+  "tool_version": "2.1.141",
+  "ai_model": "claude-opus-4-7"
+}
+```
+
+Field rules:
+
+- `tool` — your coding tool's name (e.g. `claude-code`, `cursor`, `aider`,
+  `codex-cli`, `gemini-cli`, `windsurf`, `cline`, `continue`, or your tool's
+  real name if not listed). Required.
+- `ai_model` — the underlying model id you are running (e.g. `claude-opus-4-7`,
+  `gpt-5`, `gemini-2.5-pro`). Required.
+- `tool_version` — version string if you know it. Optional.
+
+Write it once per challenge (update it if you switch models mid-session). The
+CLI reads this file automatically on `swe submit`, `mle submit`, and
+`cr submit` — no flags needed. Explicit `--tool` / `--ai-model` flags and a
+detected live session still take precedence if present.
+
+---
+
 ## Challenge Type 1: SWE-bench (Bug Fix)
 
 Real bugs from open-source projects. Your goal is to identify and fix the bug
@@ -49,11 +193,21 @@ aicodinggym swe reset <problem_id>      # Start over (destructive!)
 Kaggle-style ML competitions. Download a dataset, train a model, and submit
 predictions as a CSV file.
 
+### Notebook-first requirement (MLE-bench)
+
+For MLE-bench, your implementation must live in a **Jupyter notebook** in the
+competition folder:
+
+- Create and use: `<competition_id>/solution.ipynb`
+- It must include the **full runnable pipeline** (load → train → predict → write CSV)
+- You must **execute the notebook** so outputs exist
+- You may create helper `.py` modules, but the notebook is the **source of truth**
+
 ### CLI Commands
 
 ```bash
-aicodinggym mle download <competition_id>                    # Download dataset
-aicodinggym mle submit <competition_id> -F predictions.csv   # Submit predictions
+aicodinggym mle download <competition_id>                  # Download dataset
+aicodinggym mle submit <competition_id> -F predictions.csv # Submit predictions
 aicodinggym mle submit <competition_id> -F pred.csv -m "XGBoost v2"
 ```
 
@@ -61,104 +215,49 @@ aicodinggym mle submit <competition_id> -F pred.csv -m "XGBoost v2"
 
 1. Download the dataset: `aicodinggym mle download <competition_id>`
 2. Explore the data in `<competition_id>/data/`
-3. Train your model and generate predictions
-4. Ensure your CSV matches the expected format (see `sample_submission.csv`)
-5. Submit: `aicodinggym mle submit <competition_id> -F predictions.csv`
-6. Check your score and iterate
+3. Create `solution.ipynb` and build the full pipeline
+4. Run the notebook so predictions CSV exists on disk
+5. **Update `solution_log.json`** (see schema above) with this prompt's entry
+6. Submit: `aicodinggym mle submit <competition_id> -F predictions.csv`
+
+### Agent Execution Rules
+
+- **Execute** training and inference yourself — do not only write scripts
+- **Run the full notebook** so a predictions file exists on disk
+- **Confirm** the file was written (path, row count) before reporting done
+- **Update `solution_log.json`** in the same response after execution
 
 ---
 
 ## Challenge Type 3: Code Review
 
 Review real pull requests from open-source projects. Identify bugs, security
-issues, performance problems, and code quality concerns. Your review is
-evaluated against human-written golden comments.
+issues, performance problems, and code quality concerns.
 
 ### CLI Commands
 
 ```bash
-aicodinggym cr fetch <problem_id>                  # Clone the PR repo (base + head branches)
+aicodinggym cr fetch <problem_id>                  # Clone the PR repo
 aicodinggym cr submit <problem_id> -f review.md    # Submit review from file
 aicodinggym cr submit <problem_id> -m "Review..."  # Submit review inline
-cat review.md | aicodinggym cr submit <problem_id> # Submit review via stdin
 ```
 
 ### Recommended Workflow
 
 1. Fetch the PR: `aicodinggym cr fetch <problem_id>`
-2. Compare the base and head branches to understand the changes
-3. Review the diff for bugs, security issues, and code quality problems
-4. Write your review with specific issues, file references, and severity levels
-5. Submit: `aicodinggym cr submit <problem_id> -f review.md`
-6. Aim for 100% recall — find all the issues the human reviewers found
+2. Review `diff.patch` for bugs, security issues, and code quality problems
+3. Write your review in `review.md`
+4. Submit: `aicodinggym cr submit <problem_id> -f review.md`
 
 ---
-
-## Session Log (REQUIRED)
-
-You MUST create a session log file on your very first interaction and update it
-continuously — do not batch-write at the end.
-
-### Log Location
-
-Create the log at `<problem_id>/.log/<agent>-YYYYMMDD-HHMMSS.md` where the
-timestamp is the session start time (no colons — filesystem-safe).
-
-Examples: `django__django-10097/.log/claude-20260318-091500.md`,
-`titanic/.log/cursor-20260318-143000.md`
-
-To find the problem root:
-
-- **SWE-bench:** run `git rev-parse --show-toplevel` inside the problem repo
-  (the log is committed and pushed automatically on `swe submit`)
-- **MLE-bench:** the folder containing `data/`
-- **Code Review:** the folder containing `diff.patch`
-- **If opened in a parent folder:** navigate into `<problem_id>/` first
-
-### Log Header
-
-Create the file on your very first interaction with this header:
-
-```markdown
-# Session Log
-
-**Problem:** <problem slug, e.g. django__django-10097>
-**Challenge type:** <SWE-bench | MLE-bench | Code Review>
-**Started:** <ISO-8601 timestamp, e.g. 2026-03-13T14:00:00Z>
-**Agent:** <your tool name, e.g. "Claude Code", "Cursor", "GitHub Copilot">
-
----
-```
-
-### Entry Format
-
-Append a new entry for EVERY user message using this structure:
-
-```markdown
-## Entry <N>
-
-**Time:** <ISO-8601 timestamp>
-**User prompt:** <Copy the user's message verbatim, or a faithful summary if >500 chars>
-**Approach:** <1-3 sentences: what you plan to do>
-**Files touched:** <comma-separated list of files you modified>
-**Outcome:** <1 sentence: what happened>
-```
-
-### Log Rules
-
-- Create the file on your first interaction — do not wait
-- First entry should include a brief summary of the problem being solved
-- Never delete or alter previous entries — only append new ones
-- Use incrementing entry numbers: Entry 1, Entry 2, Entry 3, ...
-- If the user asks something unrelated, log it but mark as off-topic
-- The log is submitted automatically with the solution — no user action needed
 
 ## General Setup
 
-If the CLI is not installed, run:
+If the CLI is not installed:
 
 ```bash
 pip install aicodinggym
+pip install watchdog>=4.0   # for gym_watcher.py
 aicodinggym configure --user-id <USER_ID>
 ```
 
@@ -171,5 +270,4 @@ Get your user ID at [aicodinggym.com](https://aicodinggym.com).
 - **Do not directly search on websites or online resources for solutions**
 - Focus on the problem — avoid unrelated refactoring
 - Use local tests to verify before submitting when available
-- Commit your changes when the solution is ready
 - **Do not modify test files**
