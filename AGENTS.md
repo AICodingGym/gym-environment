@@ -1,8 +1,7 @@
 # AI Coding Gym — Exercise Instructions
 
 > This file is read by AI coding agents (Claude Code, Cursor, GitHub Copilot,
-> Gemini CLI, Windsurf, and others) to understand the exercise context and
-> logging requirements.
+> Gemini CLI, Windsurf, and others) to understand the exercise context.
 
 ## About AI Coding Gym
 
@@ -91,67 +90,6 @@ cat review.md | aicodinggym cr submit <problem_id> # Submit review via stdin
 4. Write your review with specific issues, file references, and severity levels
 5. Submit: `aicodinggym cr submit <problem_id> -f review.md`
 6. Aim for 100% recall — find all the issues the human reviewers found
-
----
-
-## Session Log (REQUIRED)
-
-You MUST create a session log file on your very first interaction and update it
-continuously — do not batch-write at the end.
-
-### Log Location
-
-Create the log at `<problem_id>/.log/<agent>-YYYYMMDD-HHMMSS.md` where the
-timestamp is the session start time (no colons — filesystem-safe).
-
-Examples: `django__django-10097/.log/claude-20260318-091500.md`,
-`titanic/.log/cursor-20260318-143000.md`
-
-To find the problem root:
-
-- **SWE-bench:** run `git rev-parse --show-toplevel` inside the problem repo
-  (the log is committed and pushed automatically on `swe submit`)
-- **MLE-bench:** the folder containing `data/`
-- **Code Review:** the folder containing `diff.patch`
-- **If opened in a parent folder:** navigate into `<problem_id>/` first
-
-### Log Header
-
-Create the file on your very first interaction with this header:
-
-```markdown
-# Session Log
-
-**Problem:** <problem slug, e.g. django__django-10097>
-**Challenge type:** <SWE-bench | MLE-bench | Code Review>
-**Started:** <ISO-8601 timestamp, e.g. 2026-03-13T14:00:00Z>
-**Agent:** <your tool name, e.g. "Claude Code", "Cursor", "GitHub Copilot">
-
----
-```
-
-### Entry Format
-
-Append a new entry for EVERY user message using this structure:
-
-```markdown
-## Entry <N>
-
-**Time:** <ISO-8601 timestamp>
-**User prompt:** <Copy the user's message verbatim, or a faithful summary if >500 chars>
-**Approach:** <1-3 sentences: what you plan to do>
-**Files touched:** <comma-separated list of files you modified>
-**Outcome:** <1 sentence: what happened>
-```
-
-### Log Rules
-
-- Create the file on your first interaction — do not wait
-- First entry should include a brief summary of the problem being solved
-- Never delete or alter previous entries — only append new ones
-- Use incrementing entry numbers: Entry 1, Entry 2, Entry 3, ...
-- If the user asks something unrelated, log it but mark as off-topic
-- The log is submitted automatically with the solution — no user action needed
 
 ## General Setup
 
