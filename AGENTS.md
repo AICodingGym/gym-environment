@@ -96,7 +96,7 @@ cat review.md | aicodinggym cr submit <problem_id> # Submit review via stdin
 If the CLI is not installed, run:
 
 ```bash
-pip install aicodinggym
+pip install aicodinggym-cli
 aicodinggym configure --user-id <USER_ID>
 ```
 
